@@ -1,0 +1,119 @@
+package com.carland.carland_auth.controller;
+
+
+import com.carland.carland_auth.dto.request.InviteRequest;
+import com.carland.carland_auth.dto.request.UserRequest;
+import com.carland.carland_auth.dto.response.InviteResponse;
+import com.carland.carland_auth.dto.response.NameSurname;
+import com.carland.carland_auth.dto.response.RegisterResponse;
+import com.carland.carland_auth.dto.response.UserResponse;
+import com.carland.carland_auth.entity.User;
+import com.carland.carland_auth.enums.EnumMessagesLangValues;
+import com.carland.carland_auth.exceptions.MissingFieldException;
+import com.carland.carland_auth.jwt.JWTService;
+import com.carland.carland_auth.repository.UserRepository;
+import com.carland.carland_auth.service.interfaces.UserService;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.*;
+
+
+@RestController
+@RequestMapping("/api/v1/users")
+@RequiredArgsConstructor
+
+public class UserController {
+    private final UserService userService;
+    private final JWTService jwtService;
+    private final UserRepository userRepository;
+
+    @GetMapping("/getNameSurname")
+    public NameSurname getNameSurname(@RequestParam Long userId) {
+
+
+        User user = userRepository.findById(userId).orElse(User.builder()
+                .name("None")
+                .surname("None")
+                .build());
+        return NameSurname.builder()
+                .name(user.getName())
+                .surname(user.getSurname())
+                .phoneNumber(user.getPhoneNumber())
+                .build();
+    }
+
+    @PostMapping("/register")
+    public RegisterResponse register(@RequestBody UserRequest request,
+                                     @RequestParam String role,
+                                     @RequestHeader("Accept-Language") String acceptLanguage) {
+        return userService.register(request, role, acceptLanguage);
+    }
+
+    @PutMapping("/setPassword")
+    public UserResponse setPassword(@Valid @RequestBody UserRequest userRequest,
+                                    @RequestHeader("Authorization") String registerToken,
+                                    @RequestHeader("Accept-Language") String acceptLanguage) {
+
+
+        Long userId = jwtService.extractUserIdFromRegisterToken(registerToken);
+        return userService.setPassword(userRequest, userId, acceptLanguage);
+    }
+
+    @PostMapping("/login")
+    public UserResponse login(@RequestBody UserRequest request,
+                              @RequestHeader("Accept-Language") String acceptLanguage) {
+
+        return userService.login(request, acceptLanguage);
+    }
+
+    @PostMapping("/refresh")
+    public UserResponse refreshToken(@RequestHeader("Authorization") String refreshToken,
+                                     @RequestHeader("Accept-Language") String acceptLanguage) {
+
+        if (refreshToken == null || refreshToken.isBlank()) {
+            throw new MissingFieldException(EnumMessagesLangValues.REFRESH_TOKEN_MISSING.getMessageByLang(acceptLanguage));
+        }
+        Long userId = jwtService.extractUserIdFromRefreshToken(refreshToken);
+        return userService.refresh(userId, refreshToken, acceptLanguage);
+    }
+
+    @PutMapping("/updatePassword")
+    public RegisterResponse updatePassword(@RequestBody UserRequest userRequest,
+                                           @RequestHeader("Accept-Language") String acceptLanguage) {
+        return userService.updatePassword(userRequest, acceptLanguage);
+    }
+
+    @PostMapping("/invite")
+    public InviteResponse inviteUser(@RequestBody InviteRequest inviteRequest,
+                                     @RequestHeader("Authorization") String accessToken,
+                                     @RequestHeader("Accept-Language") String acceptLanguage) {
+
+        if (accessToken == null || accessToken.isBlank()) {
+            throw new MissingFieldException(EnumMessagesLangValues.ACCESS_TOKEN_MISSING.getMessageByLang(acceptLanguage));
+        }
+
+        String cutToken = accessToken.substring(7);
+        if (!jwtService.isAccessTokenValid(cutToken)) {
+            throw new RuntimeException(EnumMessagesLangValues.ACCESS_TOKEN_MISSING.getMessageByLang(acceptLanguage));
+        }
+        String inviterRole = jwtService.extractUserRoleFromAccessToken(accessToken);
+        Long inviterId = jwtService.extractUserId(cutToken);
+        return userService.inviteUser(inviterId, inviterRole, inviteRequest, acceptLanguage);
+    }
+
+    @PutMapping("/delete")
+    public UserResponse deleteUser(@RequestHeader("Authorization") String accessToken,
+                                   @RequestHeader("Accept-Language") String acceptLanguage) {
+        if (accessToken == null || accessToken.isBlank()) {
+            throw new MissingFieldException(EnumMessagesLangValues.ACCESS_TOKEN_MISSING.getMessageByLang(acceptLanguage));
+        }
+
+        String cutToken = accessToken.substring(7);
+        if (!jwtService.isAccessTokenValid(cutToken)) {
+            throw new RuntimeException(EnumMessagesLangValues.ACCESS_TOKEN_MISSING.getMessageByLang(acceptLanguage));
+        }
+        Long userId = jwtService.extractUserId(cutToken);
+        return userService.deleteUser(userId,acceptLanguage);
+    }
+
+}

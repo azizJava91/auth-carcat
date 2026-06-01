@@ -1,0 +1,59 @@
+server:
+  port: 9090
+
+spring:
+  application:
+    name: carland_auth
+  datasource:
+    url: jdbc:postgresql://localhost:5433/authdatabase
+    username: username
+    password: password
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        show_sql: true
+msm:
+  api:
+    url: http://api.msm.az
+    username: test_apii
+    apikey: 85NJkcZ7
+    sendername: AL&GO
+  response:
+    success:
+      message: errno=100
+lsim:
+  api:
+    url: https://apps.lsim.az
+    login: user4car
+    password: VcC9sC%7T20!2e
+    sender: CarCat
+
+otp:
+  expiration-minutes: 3
+
+
+access:
+  token:
+    secret-key: "7f4a9c63f339110c36111661b1a568b342a1e5ab675b67a09a2e4986a2a4224a"
+    expiration: 900 # 900 seconds 15 minutes
+
+
+register:
+  token:
+    secret-key: "6598b1401213c9204763656f5e1d8d863bb117bf7d962a7d477e927298459701"
+    expiration: 360 # seconds 6 minutes
+
+refresh:
+  token:
+    secret-key: "6598b1401213c9204763656f5e1d8d863bb117bf7d962a7d477e927298459722"
+    expiration:  2592000 # seconds = 1 month
+
+carland:
+  issuer:
+    key: "carland"
+  api:
+    url: "http://carland-service:9091"
