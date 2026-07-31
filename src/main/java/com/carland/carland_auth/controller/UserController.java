@@ -6,6 +6,7 @@ import com.carland.carland_auth.dto.request.UserRequest;
 import com.carland.carland_auth.dto.response.InviteResponse;
 import com.carland.carland_auth.dto.response.NameSurname;
 import com.carland.carland_auth.dto.response.RegisterResponse;
+import com.carland.carland_auth.dto.response.UserListItem;
 import com.carland.carland_auth.dto.response.UserResponse;
 import com.carland.carland_auth.entity.User;
 import com.carland.carland_auth.enums.EnumMessagesLangValues;
@@ -15,7 +16,13 @@ import com.carland.carland_auth.repository.UserRepository;
 import com.carland.carland_auth.service.interfaces.UserService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Sort;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.List;
 
 
 @RestController
@@ -40,6 +47,39 @@ public class UserController {
                 .surname(user.getSurname())
                 .phoneNumber(user.getPhoneNumber())
                 .build();
+    }
+
+    /**
+     * Internal endpoint — carland_service admin paneli için kullanıcı listesi.
+     * password ve role alanları bilerek dahil edilmez.
+     * from/to (ISO yyyy-MM-dd) verilirse createdAt'e göre filtreler, to günü dahildir.
+     */
+    @GetMapping("/list")
+    public List<UserListItem> getUserList(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to
+    ) {
+
+        List<User> users;
+
+        if (from == null && to == null) {
+            users = userRepository.findAll(Sort.by("id"));
+        } else {
+            LocalDateTime fromDt = (from != null ? from : LocalDate.of(1970, 1, 1)).atStartOfDay();
+            LocalDateTime toDtExclusive = (to != null ? to : LocalDate.of(9999, 12, 30)).plusDays(1).atStartOfDay();
+            users = userRepository.findAllByCreatedAtGreaterThanEqualAndCreatedAtLessThanOrderByIdAsc(fromDt, toDtExclusive);
+        }
+
+        return users.stream()
+                .map(user -> UserListItem.builder()
+                        .id(user.getId())
+                        .createdAt(user.getCreatedAt())
+                        .phoneNumber(user.getPhoneNumber())
+                        .status(user.getStatus())
+                        .name(user.getName())
+                        .surname(user.getSurname())
+                        .build())
+                .toList();
     }
 
     @PostMapping("/register")

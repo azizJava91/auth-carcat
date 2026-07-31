@@ -39,7 +39,8 @@ public class JWTConfiguration {
                                 "/api/v1/users/login",
                                 "/api/v1/users/updatePassword",
                                 "/invite-ui/get",
-                                "/api/v1/users/getNameSurname")
+                                "/api/v1/users/getNameSurname",
+                                "/api/v1/users/list")
                         .permitAll()
                         .anyRequest().authenticated())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))

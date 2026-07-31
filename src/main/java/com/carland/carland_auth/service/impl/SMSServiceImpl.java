@@ -84,7 +84,7 @@ public class SMSServiceImpl implements SMSService {
 
         //   success check
 //        if (response == null || response.toLowerCase().contains("error")) {
-//            throw new RuntimeException("SMS gönderilemedi");
+//            throw new RuntimeException("SMS gönderilmedi");
 //        }
     }
 }

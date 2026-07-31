@@ -6,11 +6,17 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
+import java.util.List;
+
 @Repository
 public interface UserRepository extends JpaRepository<User, Long> {
 
 
     User findByIdAndStatus(Long userId, String status);
+
+    List<User> findAllByCreatedAtGreaterThanEqualAndCreatedAtLessThanOrderByIdAsc(
+            LocalDateTime from, LocalDateTime toExclusive);
 
     User findByPhoneNumber(String phoneNumber);
     User findByPhoneNumberAndStatus(String phoneNumber, String  status);

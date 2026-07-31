@@ -37,12 +37,7 @@ public class OtpServiceImpl implements OtpService {
     private long expirationMinutes;
 
     public OtpResponse createOtp(Long userId, String acceptLanguage) {
-        if (userId == 60L) {
-            log.info("test user OTP isteyir");
-    return OtpResponse.builder()
-            .message(EnumMessagesLangValues.OTP_SENT.getMessageByLang(acceptLanguage))
-            .build();
-        }
+
         User user = checkUserForFoundAndStatus(userId, acceptLanguage);
 
         String code = generateOtpCode();

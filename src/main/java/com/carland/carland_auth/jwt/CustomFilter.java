@@ -27,7 +27,8 @@ public class CustomFilter extends OncePerRequestFilter {
             "/api/v1/users/login",
             "/api/v1/users/updatePassword",
             "/invite-ui/get",
-            "/api/v1/users/getNameSurname"
+            "/api/v1/users/getNameSurname",
+            "/api/v1/users/list"
     );
 
     @Override
