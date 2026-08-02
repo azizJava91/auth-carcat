@@ -1,6 +1,20 @@
 server:
   port: 9090
 
+springdoc:
+  swagger-ui:
+    persist-authorization: true
+    try-it-out-enabled: true
+    custom-js: /swagger-custom.js
+
+carland:
+  swagger:
+    public-server-url: ${SWAGGER_PUBLIC_SERVER_URL:https://digital-innovation.agency/auth/server}
+  issuer:
+    key: "carland"
+  api:
+    url: "http://carland-service:9091"
+
 spring:
   application:
     name: carland_auth
@@ -51,9 +65,3 @@ refresh:
   token:
     secret-key: "6598b1401213c9204763656f5e1d8d863bb117bf7d962a7d477e927298459722"
     expiration:  2592000 # seconds = 1 month
-
-carland:
-  issuer:
-    key: "carland"
-  api:
-    url: "http://carland-service:9091"

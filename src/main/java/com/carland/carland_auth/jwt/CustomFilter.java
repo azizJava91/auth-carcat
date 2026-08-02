@@ -40,7 +40,13 @@ public class CustomFilter extends OncePerRequestFilter {
         if (lang == null) lang = "az";
 
         String path = request.getRequestURI();
-        if (PUBLIC_PATHS.contains(path)) {
+        if (PUBLIC_PATHS.contains(path)
+                || path.contains("/swagger-ui")
+                || path.contains("/v3/api-docs")
+                || path.contains("/swagger-resources")
+                || path.contains("/webjars/")
+                || path.equals("/swagger-custom.js")
+                || path.equals("/swagger-auth-config")) {
             filterChain.doFilter(request, response);
             return;
         }

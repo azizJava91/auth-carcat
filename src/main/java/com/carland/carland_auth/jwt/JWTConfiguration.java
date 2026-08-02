@@ -40,7 +40,14 @@ public class JWTConfiguration {
                                 "/api/v1/users/updatePassword",
                                 "/invite-ui/get",
                                 "/api/v1/users/getNameSurname",
-                                "/api/v1/users/list")
+                                "/api/v1/users/list",
+                                "/swagger-ui/**",
+                                "/swagger-ui.html",
+                                "/v3/api-docs/**",
+                                "/swagger-resources/**",
+                                "/webjars/**",
+                                "/swagger-custom.js",
+                                "/swagger-auth-config")
                         .permitAll()
                         .anyRequest().authenticated())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
