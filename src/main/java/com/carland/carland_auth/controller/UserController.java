@@ -35,6 +35,8 @@ public class UserController {
     private final UserRepository userRepository;
 
 
+
+
     @GetMapping("/getNameSurname")
     public NameSurname getNameSurname(@RequestParam Long userId) {
 

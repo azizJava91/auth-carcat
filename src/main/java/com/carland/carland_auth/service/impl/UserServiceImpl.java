@@ -16,6 +16,7 @@ import com.carland.carland_auth.feign.CarlandFeign;
 import com.carland.carland_auth.jwt.JWTService;
 import com.carland.carland_auth.repository.RefreshTokenRepository;
 import com.carland.carland_auth.repository.UserRepository;
+import com.carland.carland_auth.service.PinAttemptService;
 import com.carland.carland_auth.service.interfaces.OtpService;
 import com.carland.carland_auth.service.interfaces.RefreshTokenService;
 import com.carland.carland_auth.service.interfaces.UserService;
@@ -43,16 +44,6 @@ public class UserServiceImpl implements UserService {
     @Value("${authentication.token.expiration}")
     private Long AUTHENTICATION_TOKEN_EXPIRATION;
 
-    @Value("${pin.max-attempts:3}")
-    private int pinMaxAttempts;
-
-    @Value("${pin.attempt-window-minutes:10}")
-    private int pinAttemptWindowMinutes;
-
-    @Value("${pin.lock-duration-minutes:5}")
-    private int pinLockDurationMinutes;
-
-
     private final BCryptPasswordEncoder passwordEncoder;
     private final UserRepository userRepository;
     private final JWTService jwtService;
@@ -60,6 +51,7 @@ public class UserServiceImpl implements UserService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final OtpService otpService;
     private final CarlandFeign carlandFeign;
+    private final PinAttemptService pinAttemptService;
 
     @Transactional
     @Override
@@ -135,17 +127,29 @@ public class UserServiceImpl implements UserService {
         }
 
         LocalDateTime now = LocalDateTime.now();
-        clearExpiredPinLock(user, now);
+        pinAttemptService.clearExpiredLock(user.getId());
+        user = userRepository.findById(user.getId()).orElseThrow();
 
-        if (isPinLocked(user, now)) {
-            throwPinLocked(user, acceptLanguage, now);
+        if (user.getPinLockedUntil() != null && user.getPinLockedUntil().isAfter(now)) {
+            long remainingSeconds = Math.max(1, java.time.Duration.between(now, user.getPinLockedUntil()).getSeconds());
+            throw new PinLockedException(
+                    EnumMessagesLangValues.PIN_LOCKED.getMessageByLang(acceptLanguage),
+                    user.getPinLockedUntil(),
+                    remainingSeconds);
         }
 
         if (!passwordEncoder.matches(credential, user.getPin())) {
-            handleWrongPin(user, acceptLanguage, now);
+            PinAttemptService.Result result = pinAttemptService.recordWrongPin(user.getId());
+            if (result.locked()) {
+                throw new PinLockedException(
+                        EnumMessagesLangValues.PIN_LOCKED.getMessageByLang(acceptLanguage),
+                        result.lockedUntil(),
+                        result.remainingSeconds());
+            }
+            throw new WrongPasswordException(EnumMessagesLangValues.WRONG_PASSWORD.getMessageByLang(acceptLanguage));
         }
 
-        resetPinFailureState(user);
+        pinAttemptService.clearFailureState(user.getId());
 
         String accessTokenJWT = jwtService.generateAccessToken(user, ACCESS_TOKEN_EXPIRATION);
 
@@ -325,55 +329,5 @@ public class UserServiceImpl implements UserService {
                 .build();
     }
 
-    private void clearExpiredPinLock(User user, LocalDateTime now) {
-        if (user.getPinLockedUntil() != null && !user.getPinLockedUntil().isAfter(now)) {
-            user.setPinLockedUntil(null);
-        }
-    }
-
-    private boolean isPinLocked(User user, LocalDateTime now) {
-        return user.getPinLockedUntil() != null && user.getPinLockedUntil().isAfter(now);
-    }
-
-    private void throwPinLocked(User user, String acceptLanguage, LocalDateTime now) {
-        long remainingSeconds = Math.max(1, java.time.Duration.between(now, user.getPinLockedUntil()).getSeconds());
-        throw new PinLockedException(
-                EnumMessagesLangValues.PIN_LOCKED.getMessageByLang(acceptLanguage),
-                user.getPinLockedUntil(),
-                remainingSeconds
-        );
-    }
-
-    private void handleWrongPin(User user, String acceptLanguage, LocalDateTime now) {
-        log.info("wrong pin error userId={}", user.getId());
-
-        int attempts;
-        if (user.getLastFailedPinAt() == null
-                || user.getLastFailedPinAt().isBefore(now.minusMinutes(pinAttemptWindowMinutes))) {
-            attempts = 1;
-        } else {
-            int current = user.getFailedPinAttempts() == null ? 0 : user.getFailedPinAttempts();
-            attempts = current + 1;
-        }
-
-        user.setFailedPinAttempts(attempts);
-        user.setLastFailedPinAt(now);
-
-        if (attempts >= pinMaxAttempts) {
-            user.setPinLockedUntil(now.plusMinutes(pinLockDurationMinutes));
-            user.setFailedPinAttempts(0);
-            userRepository.save(user);
-            throwPinLocked(user, acceptLanguage, now);
-        }
-
-        userRepository.save(user);
-        throw new WrongPasswordException(EnumMessagesLangValues.WRONG_PASSWORD.getMessageByLang(acceptLanguage));
-    }
-
-    private void resetPinFailureState(User user) {
-        user.setFailedPinAttempts(0);
-        user.setLastFailedPinAt(null);
-        user.setPinLockedUntil(null);
-    }
-
 }
+

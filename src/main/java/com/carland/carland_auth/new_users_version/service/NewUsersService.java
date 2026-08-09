@@ -12,6 +12,7 @@ import com.carland.carland_auth.jwt.JWTService;
 import com.carland.carland_auth.new_users_version.dto.AuthFlowResponse;
 import com.carland.carland_auth.new_users_version.dto.NewOtpRequest;
 import com.carland.carland_auth.repository.*;
+import com.carland.carland_auth.service.PinAttemptService;
 import com.carland.carland_auth.service.interfaces.RefreshTokenService;
 import com.carland.carland_auth.service.interfaces.SMSService;
 import com.carland.carland_auth.util.HashUtil;
@@ -72,15 +73,6 @@ public class NewUsersService {
     @Value("${otp.new.verify-lock-minutes:5}")
     private int verifyLockMinutes;
 
-    @Value("${pin.max-attempts:3}")
-    private int pinMaxAttempts;
-
-    @Value("${pin.attempt-window-minutes:10}")
-    private int pinAttemptWindowMinutes;
-
-    @Value("${pin.lock-duration-minutes:5}")
-    private int pinLockDurationMinutes;
-
     private final UserRepository userRepository;
     private final JWTService jwtService;
     private final OtpRepository otpRepository;
@@ -91,6 +83,7 @@ public class NewUsersService {
     private final RefreshTokenService refreshTokenService;
     private final SMSService smsService;
     private final BCryptPasswordEncoder passwordEncoder;
+    private final PinAttemptService pinAttemptService;
 
     public AuthFlowResponse auth(UserRequest request, String acceptLanguage) {
         if (request == null) {
@@ -321,20 +314,25 @@ public class NewUsersService {
         }
 
         LocalDateTime now = LocalDateTime.now();
-        if (user.getPinLockedUntil() != null && !user.getPinLockedUntil().isAfter(now)) {
-            user.setPinLockedUntil(null);
-        }
+        pinAttemptService.clearExpiredLock(user.getId());
+        user = userRepository.findById(user.getId()).orElseThrow();
+
         if (user.getPinLockedUntil() != null && user.getPinLockedUntil().isAfter(now)) {
             throwLocked(user.getPinLockedUntil(), acceptLanguage, now);
         }
 
         if (!passwordEncoder.matches(pinCode, user.getPin())) {
-            handleWrongPin(user, acceptLanguage, now);
+            PinAttemptService.Result result = pinAttemptService.recordWrongPin(user.getId());
+            if (result.locked()) {
+                throw new PinLockedException(
+                        EnumMessagesLangValues.PIN_LOCKED.getMessageByLang(acceptLanguage),
+                        result.lockedUntil(),
+                        result.remainingSeconds());
+            }
+            throw new WrongPasswordException(EnumMessagesLangValues.WRONG_PASSWORD.getMessageByLang(acceptLanguage));
         }
 
-        user.setFailedPinAttempts(0);
-        user.setLastFailedPinAt(null);
-        user.setPinLockedUntil(null);
+        pinAttemptService.clearFailureState(user.getId());
 
         String accessToken = jwtService.generateAccessToken(user, accessTokenExpiration);
         RefreshToken refreshToken = refreshTokenService.createRefreshToken(
@@ -353,27 +351,6 @@ public class NewUsersService {
                 .phoneNumber(user.getPhoneNumber())
                 .message(EnumMessagesLangValues.LOGIN_SUCCESS.getMessageByLang(acceptLanguage))
                 .build();
-    }
-
-    private void handleWrongPin(User user, String acceptLanguage, LocalDateTime now) {
-        int attempts;
-        if (user.getLastFailedPinAt() == null
-                || user.getLastFailedPinAt().isBefore(now.minusMinutes(pinAttemptWindowMinutes))) {
-            attempts = 1;
-        } else {
-            int current = user.getFailedPinAttempts() == null ? 0 : user.getFailedPinAttempts();
-            attempts = current + 1;
-        }
-        user.setFailedPinAttempts(attempts);
-        user.setLastFailedPinAt(now);
-        if (attempts >= pinMaxAttempts) {
-            user.setPinLockedUntil(now.plusMinutes(pinLockDurationMinutes));
-            user.setFailedPinAttempts(0);
-            userRepository.save(user);
-            throwLocked(user.getPinLockedUntil(), acceptLanguage, now);
-        }
-        userRepository.save(user);
-        throw new WrongPasswordException(EnumMessagesLangValues.WRONG_PASSWORD.getMessageByLang(acceptLanguage));
     }
 
     private void handleWrongOtpVerify(String phone, LocalDateTime now, String acceptLanguage) {
