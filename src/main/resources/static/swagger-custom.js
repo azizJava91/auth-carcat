@@ -34,14 +34,14 @@
     }
   }
 
-  async function login(cfg, phoneNumber, password) {
+  async function login(cfg, phoneNumber, pin) {
     const res = await fetch(cfg.loginUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Accept-Language': cfg.acceptLanguage || 'az'
       },
-      body: JSON.stringify({ phoneNumber: phoneNumber, password: password })
+      body: JSON.stringify({ phoneNumber: phoneNumber, pin: pin })
     });
     const body = await res.json().catch(function () { return {}; });
     if (!res.ok) {
@@ -88,7 +88,7 @@
     panel.innerHTML =
       '<strong style="margin-right:8px;">Carland Login</strong>' +
       '<input id="cl-phone" placeholder="phoneNumber" style="padding:6px 8px;border-radius:6px;border:1px solid #444;background:#111;color:#fff;min-width:160px;" />' +
-      '<input id="cl-pass" type="password" placeholder="password" style="padding:6px 8px;border-radius:6px;border:1px solid #444;background:#111;color:#fff;min-width:140px;" />' +
+      '<input id="cl-pass" type="password" inputmode="numeric" maxlength="4" placeholder="pin" style="padding:6px 8px;border-radius:6px;border:1px solid #444;background:#111;color:#fff;min-width:140px;" />' +
       '<button id="cl-login" type="button" style="padding:6px 12px;border:none;border-radius:6px;background:#2563eb;color:#fff;font-weight:700;cursor:pointer;">Login & Authorize</button>' +
       '<button id="cl-refresh" type="button" style="padding:6px 12px;border:none;border-radius:6px;background:#16a34a;color:#fff;font-weight:700;cursor:pointer;">Refresh token</button>' +
       '<span id="cl-status" style="opacity:.85;"></span>';

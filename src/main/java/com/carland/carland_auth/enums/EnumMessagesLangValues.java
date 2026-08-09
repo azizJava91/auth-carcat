@@ -34,9 +34,9 @@ public enum EnumMessagesLangValues {
             "Регистрация прошла успешно (существующий пользователь обновлён)"
     ),
     MISSING_USER_FIELDS(
-            "İstifadəçi adı, ID və şifrə boş ola bilməz",
-            "Username, ID and password cannot be empty",
-            "Имя пользователя, ID и пароль не могут быть пустыми"
+            "Telefon nömrəsi və PIN boş ola bilməz",
+            "Phone number and PIN cannot be empty",
+            "Номер телефона и PIN не могут быть пустыми"
     ),
     USER_NOT_FOUND(
             "İstifadəçi mövcud deyil",
@@ -44,9 +44,45 @@ public enum EnumMessagesLangValues {
             "Пользователь не найден"
     ),
     WRONG_PASSWORD(
-            "Daxil etdiyiniz şifrə yanlışdır.",
-            "The password you entered is incorrect",
-            "Введённый пароль неверный."
+            "Daxil etdiyiniz PIN yanlışdır.",
+            "The PIN you entered is incorrect",
+            "Введённый PIN неверный."
+    ),
+    WEAK_PIN(
+            "PIN zəifdir. 4 rəqəmli olmalıdır; bütün rəqəmlər eyni və ya ardıcıl (məs. 1234) ola bilməz.",
+            "Weak PIN. It must be 4 digits and not all the same or a sequence (e.g. 1234).",
+            "Слабый PIN. Должен состоять из 4 цифр; одинаковые или последовательные (напр. 1234) нельзя."
+    ),
+    OTP_RATE_LIMITED(
+            "Çox sayda OTP sorğusu. Bir az sonra yenidən cəhd edin.",
+            "Too many OTP requests. Please try again later.",
+            "Слишком много OTP запросов. Попробуйте позже."
+    ),
+    OTP_RESEND_COOLDOWN(
+            "OTP yenidən göndərmək üçün bir az gözləyin.",
+            "Please wait before requesting another OTP.",
+            "Подождите перед повторным запросом OTP."
+    ),
+    DEVICE_REQUIRED(
+            "deviceToken və platform tələb olunur",
+            "deviceToken and platform are required",
+            "Требуются deviceToken и platform"
+    ),
+    AUTH_TOKEN_MISSING(
+            "authToken tələb olunur",
+            "authToken is required",
+            "Требуется authToken"
+    ),
+    AUTH_TOKEN_INVALID(
+            "authToken etibarsızdır və ya vaxtı bitib",
+            "authToken is invalid or expired",
+            "authToken недействителен или истёк"
+    ),
+
+    PIN_LOCKED(
+            "Hesab müvəqqəti kilidlənib. Bir az sonra yenidən cəhd edin.",
+            "Account is temporarily locked. Please try again later.",
+            "Аккаунт временно заблокирован. Попробуйте позже."
     ),
     LOGIN_SUCCESS(
             "Uğurlu giriş",
@@ -74,9 +110,9 @@ public enum EnumMessagesLangValues {
             "Пользователь имеет недопустимый статус"
     ),
     PASSWORD_SET_SUCCESS(
-            "Şifrə təyin edildi",
-            "Password set successfully",
-            "Пароль успешно установлен"
+            "PIN təyin edildi",
+            "PIN set successfully",
+            "PIN успешно установлен"
     ),
     MISSING_PHONE_NUMBER(
             "Telefon nömrəsi boş ola bilməz",
@@ -113,10 +149,10 @@ public enum EnumMessagesLangValues {
             "Отсутствует refresh токен"
     ),
 
-    REGISTER_TOKEN_EXPIRED(
-            "Register tokenin vaxtı keçib",
-            "Register token expired",
-            "Срок действия регистрационного токена истек"
+    AUTHENTICATION_TOKEN_EXPIRED(
+            "Authentication tokenin vaxtı keçib",
+            "Authentication token expired",
+            "Срок действия токена аутентификации истек"
     ),
     EXPIRED_OTP(
             "OTP aktivlik müddəti bitmişdir",

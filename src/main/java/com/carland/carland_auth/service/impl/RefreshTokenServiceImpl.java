@@ -22,11 +22,16 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
 
     @Override
     public RefreshToken createRefreshToken(User user) {
+        return createRefreshToken(user, null, null);
+    }
 
-
+    @Override
+    public RefreshToken createRefreshToken(User user, String deviceId, String platform) {
         return RefreshToken.builder()
                 .token(jwtService.generateRefreshToken(user, REFRESH_TOKEN_EXPIRATION_SECONDS))
                 .createdAt(LocalDateTime.now())
+                .deviceId(deviceId)
+                .platform(platform)
                 .build();
     }
 }

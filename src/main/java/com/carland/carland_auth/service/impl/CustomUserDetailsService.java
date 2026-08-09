@@ -16,7 +16,7 @@ import org.springframework.stereotype.Service;
 
 public class CustomUserDetailsService implements UserDetailsService {
 
-    private  final UserRepository userRepository;
+    private final UserRepository userRepository;
 
 
     @Override
@@ -24,10 +24,9 @@ public class CustomUserDetailsService implements UserDetailsService {
         User user = userRepository.findByPhoneNumber(username);
 
         if (user == null) {
-
             throw new UsernameNotFoundException(EnumMessagesLangValues.USER_NOT_FOUND.getMessageByLang("az"));
         }
 
-        return new CustomUserDetails(user.getPhoneNumber(),user.getPassword());
+        return new CustomUserDetails(user.getPhoneNumber(), user.getPin());
     }
 }

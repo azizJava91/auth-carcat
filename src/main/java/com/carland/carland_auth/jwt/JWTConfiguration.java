@@ -35,9 +35,18 @@ public class JWTConfiguration {
                 .csrf(AbstractHttpConfigurer::disable)
                 .httpBasic(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/v1/users/register",
+                        .requestMatchers(
+                                "/api/v1/users/register",
+                                "/api/v1/users/authentication",
                                 "/api/v1/users/login",
+                                "/api/v1/users/update/password",
+                                "/api/v1/users/update/pin",
                                 "/api/v1/users/updatePassword",
+                                "/api/v1/newUsers/auth",
+                                "/api/v1/newUsers/loginNew",
+                                "/api/v1/newUsers/otp/createAndSendNew",
+                                "/api/v1/newUsers/otp/verifyNew",
+                                "/api/v1/newUsers/setPinCode",
                                 "/invite-ui/get",
                                 "/api/v1/users/getNameSurname",
                                 "/api/v1/users/list",

@@ -162,6 +162,31 @@ private final ObjectMapper objectMapper;
         return new ResponseEntity<>(responseException, HttpStatus.UNAUTHORIZED);
     }
 
+    @ExceptionHandler(WeakPinException.class)
+    public ResponseEntity<ResponseException> handleWeakPinException(WeakPinException ex) {
+        ResponseException responseException = ResponseException.builder()
+                .error("Weak PIN")
+                .message(ex.getMessage())
+                .timeStamp(LocalDateTime.now())
+                .status(HttpStatus.BAD_REQUEST.value())
+                .build();
+        return new ResponseEntity<>(responseException, HttpStatus.BAD_REQUEST);
+    }
+
+    @ExceptionHandler(PinLockedException.class)
+    public ResponseEntity<ResponseException> handlePinLockedException(PinLockedException ex) {
+        ResponseException responseException = ResponseException.builder()
+                .error("LOGIN_LOCKED")
+                .message(ex.getMessage())
+                .timeStamp(LocalDateTime.now())
+                .status(HttpStatus.TOO_MANY_REQUESTS.value())
+                .lockedUntil(ex.getLockedUntil())
+                .remainingSeconds(ex.getRemainingSeconds())
+                .retryAfter(ex.getRemainingSeconds())
+                .build();
+        return new ResponseEntity<>(responseException, HttpStatus.TOO_MANY_REQUESTS);
+    }
+
     @ExceptionHandler(RefreshTokenNotSetException.class)
     public ResponseEntity<ResponseException> handleRefreshTokenNotSetException(RefreshTokenNotSetException ex) {
         ResponseException responseException=ResponseException.builder()

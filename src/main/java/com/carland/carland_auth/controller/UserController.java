@@ -3,9 +3,9 @@ package com.carland.carland_auth.controller;
 
 import com.carland.carland_auth.dto.request.InviteRequest;
 import com.carland.carland_auth.dto.request.UserRequest;
+import com.carland.carland_auth.dto.response.AuthenticationResponse;
 import com.carland.carland_auth.dto.response.InviteResponse;
 import com.carland.carland_auth.dto.response.NameSurname;
-import com.carland.carland_auth.dto.response.RegisterResponse;
 import com.carland.carland_auth.dto.response.UserListItem;
 import com.carland.carland_auth.dto.response.UserResponse;
 import com.carland.carland_auth.entity.User;
@@ -51,7 +51,7 @@ public class UserController {
 
     /**
      * Internal endpoint — carland_service admin paneli için kullanıcı listesi.
-     * password ve role alanları bilerek dahil edilmez.
+     * pin ve role alanları bilerek dahil edilmez.
      * from/to (ISO yyyy-MM-dd) verilirse createdAt'e göre filtreler, to günü dahildir.
      */
     @GetMapping("/list")
@@ -82,21 +82,23 @@ public class UserController {
                 .toList();
     }
 
-    @PostMapping("/register")
-    public RegisterResponse register(@RequestBody UserRequest request,
-                                     @RequestParam String role,
-                                     @RequestHeader("Accept-Language") String acceptLanguage) {
-        return userService.register(request, role, acceptLanguage);
+    /** Legacy register. */
+    @PostMapping({"/register", "/authentication"})
+    public AuthenticationResponse register(@RequestBody UserRequest request,
+                                           @RequestParam String role,
+                                           @RequestHeader("Accept-Language") String acceptLanguage) {
+        return userService.authenticate(request, role, acceptLanguage);
     }
 
-    @PutMapping("/setPassword")
+    /** Legacy set password; camelCase + /set/pin kept as aliases (Postman / old clients). */
+    @PutMapping({"/set/password", "/set/pin", "/setPassword"})
     public UserResponse setPassword(@Valid @RequestBody UserRequest userRequest,
-                                    @RequestHeader("Authorization") String registerToken,
+                                    @RequestHeader("Authorization") String authenticationToken,
                                     @RequestHeader("Accept-Language") String acceptLanguage) {
 
 
-        Long userId = jwtService.extractUserIdFromRegisterToken(registerToken);
-        return userService.setPassword(userRequest, userId, acceptLanguage);
+        Long userId = jwtService.extractUserIdFromAuthenticationToken(authenticationToken);
+        return userService.setPin(userRequest, userId, acceptLanguage);
     }
 
     @PostMapping("/login")
@@ -117,10 +119,11 @@ public class UserController {
         return userService.refresh(userId, refreshToken, acceptLanguage);
     }
 
-    @PutMapping("/updatePassword")
-    public RegisterResponse updatePassword(@RequestBody UserRequest userRequest,
-                                           @RequestHeader("Accept-Language") String acceptLanguage) {
-        return userService.updatePassword(userRequest, acceptLanguage);
+    /** Legacy forgot-password entry; camelCase + /update/pin kept as aliases. */
+    @PutMapping({"/update/password", "/update/pin", "/updatePassword"})
+    public AuthenticationResponse updatePassword(@RequestBody UserRequest userRequest,
+                                                 @RequestHeader("Accept-Language") String acceptLanguage) {
+        return userService.updatePin(userRequest, acceptLanguage);
     }
 
     @PostMapping("/invite")
@@ -153,7 +156,7 @@ public class UserController {
             throw new RuntimeException(EnumMessagesLangValues.ACCESS_TOKEN_MISSING.getMessageByLang(acceptLanguage));
         }
         Long userId = jwtService.extractUserId(cutToken);
-        return userService.deleteUser(userId,acceptLanguage);
+        return userService.deleteUser(userId, acceptLanguage);
     }
 
 }

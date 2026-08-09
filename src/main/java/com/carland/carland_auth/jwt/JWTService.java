@@ -21,18 +21,14 @@ public class JWTService {
     @Value("${access.token.secret-key}")
     private String accessTokenSecretKey;
 
-    @Value("${register.token.secret-key}")
-    private String registerTokenSecretKey;
+    @Value("${authentication.token.secret-key}")
+    private String authenticationTokenSecretKey;
 
     @Value("${refresh.token.secret-key}")
     private String refreshTokenSecretKey;
 
     @Value("${carland.issuer.key}")
     private String issuerKey;
-
-
-
-
 
 
     public String generateAccessToken(User user, Long expirationTime) {
@@ -48,6 +44,7 @@ public class JWTService {
                 .issuer(issuerKey)
                 .compact();
     }
+
     public String generateRefreshToken(User user, Long expirationTime) {
         return Jwts.builder()
                 .subject(user.getPhoneNumber())
@@ -60,15 +57,55 @@ public class JWTService {
                 .compact();
     }
 
-    public String generateRegisterToken(User user, Long expirationTime) {
+    public String generateAuthenticationToken(User user, Long expirationTime) {
         return Jwts.builder()
                 .claim("userId", user.getId())
-                .claim("type", "REGISTER")
-                .subject("user-registration")
+                .claim("type", "AUTHENTICATION")
+                .subject("user-authentication")
                 .issuedAt(new Date())
                 .expiration(Date.from(Instant.now().plusSeconds(expirationTime)))
-                .signWith(getSignKey(registerTokenSecretKey))
+                .signWith(getSignKey(authenticationTokenSecretKey))
                 .compact();
+    }
+
+    /**
+     * New-users flow authToken (user may not exist yet). Carries phone + purpose.
+     */
+    public String generatePhoneAuthToken(String phoneNumber, String purpose, Long expirationTime) {
+        return Jwts.builder()
+                .claim("phoneNumber", phoneNumber)
+                .claim("purpose", purpose == null ? "REGISTER" : purpose.toUpperCase())
+                .claim("type", "AUTH_FLOW")
+                .subject("auth-flow")
+                .issuedAt(new Date())
+                .expiration(Date.from(Instant.now().plusSeconds(expirationTime)))
+                .signWith(getSignKey(authenticationTokenSecretKey))
+                .compact();
+    }
+
+    public String extractPhoneFromAuthToken(String token) {
+        return extractClaim(stripBearer(token), claims -> claims.get("phoneNumber", String.class), authenticationTokenSecretKey);
+    }
+
+    public String extractPurposeFromAuthToken(String token) {
+        return extractClaim(stripBearer(token), claims -> claims.get("purpose", String.class), authenticationTokenSecretKey);
+    }
+
+    public boolean isPhoneAuthTokenValid(String token) {
+        try {
+            String type = extractClaim(stripBearer(token), claims -> claims.get("type", String.class), authenticationTokenSecretKey);
+            return "AUTH_FLOW".equals(type) && !isTokenExpired(stripBearer(token), authenticationTokenSecretKey);
+        } catch (Exception ex) {
+            return false;
+        }
+    }
+
+    private String stripBearer(String token) {
+        if (token == null) {
+            return null;
+        }
+        String t = token.trim();
+        return t.regionMatches(true, 0, "Bearer ", 0, 7) ? t.substring(7).trim() : t;
     }
 
 
@@ -77,7 +114,7 @@ public class JWTService {
     }
 
     public Long extractUserIdFromRefreshToken(String token) {
-        return extractClaim(token.substring(7).trim(), claims -> claims.get("userId", Long.class), refreshTokenSecretKey);
+        return extractClaim(stripBearer(token), claims -> claims.get("userId", Long.class), refreshTokenSecretKey);
     }
 
     public String extractUsername(String token) {
@@ -85,20 +122,21 @@ public class JWTService {
     }
 
 
-
-    public Long extractUserIdFromRegisterToken(String token) {
-        return extractClaim(token.substring(7).trim(), claims -> claims.get("userId", Long.class), registerTokenSecretKey);
+    public Long extractUserIdFromAuthenticationToken(String token) {
+        return extractClaim(stripBearer(token), claims -> claims.get("userId", Long.class), authenticationTokenSecretKey);
     }
 
 
     public boolean isAccessTokenValid(String token) {
         return !isTokenExpired(token, accessTokenSecretKey);
     }
-    public boolean isRegisterTokenValid(String token) {
-        return !isTokenExpired(token, registerTokenSecretKey);
+
+    public boolean isAuthenticationTokenValid(String token) {
+        return !isTokenExpired(stripBearer(token), authenticationTokenSecretKey);
     }
+
     public boolean isRefreshTokenValid(String token) {
-        return !isTokenExpired(token, refreshTokenSecretKey);
+        return !isTokenExpired(stripBearer(token), refreshTokenSecretKey);
     }
 
 
@@ -126,11 +164,11 @@ public class JWTService {
         return Keys.hmacShaKeyFor(key.getBytes());
     }
 
-    public String extractUserRoleFromRegisterToken(String token) {
-        return extractClaim(token.substring(7).trim(), claims -> claims.get("role", String.class), registerTokenSecretKey);
+    public String extractUserRoleFromAuthenticationToken(String token) {
+        return extractClaim(token.substring(7).trim(), claims -> claims.get("role", String.class), authenticationTokenSecretKey);
     }
+
     public String extractUserRoleFromAccessToken(String token) {
         return extractClaim(token.substring(7).trim(), claims -> claims.get("role", String.class), accessTokenSecretKey);
     }
 }
-

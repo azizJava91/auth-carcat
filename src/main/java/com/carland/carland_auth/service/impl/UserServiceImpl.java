@@ -4,7 +4,7 @@ package com.carland.carland_auth.service.impl;
 import com.carland.carland_auth.dto.request.InviteRequest;
 import com.carland.carland_auth.dto.request.UserRequest;
 import com.carland.carland_auth.dto.response.InviteResponse;
-import com.carland.carland_auth.dto.response.RegisterResponse;
+import com.carland.carland_auth.dto.response.AuthenticationResponse;
 import com.carland.carland_auth.dto.response.UserResponse;
 import com.carland.carland_auth.entity.RefreshToken;
 import com.carland.carland_auth.entity.User;
@@ -19,6 +19,7 @@ import com.carland.carland_auth.repository.UserRepository;
 import com.carland.carland_auth.service.interfaces.OtpService;
 import com.carland.carland_auth.service.interfaces.RefreshTokenService;
 import com.carland.carland_auth.service.interfaces.UserService;
+import com.carland.carland_auth.util.PinValidator;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -29,7 +30,6 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Locale;
 import java.util.UUID;
 
 @Service
@@ -40,8 +40,17 @@ public class UserServiceImpl implements UserService {
     @Value("${access.token.expiration}")
     private Long ACCESS_TOKEN_EXPIRATION;
 
-    @Value("${register.token.expiration}")
-    private Long REGISTER_TOKEN_EXPIRATION;
+    @Value("${authentication.token.expiration}")
+    private Long AUTHENTICATION_TOKEN_EXPIRATION;
+
+    @Value("${pin.max-attempts:3}")
+    private int pinMaxAttempts;
+
+    @Value("${pin.attempt-window-minutes:10}")
+    private int pinAttemptWindowMinutes;
+
+    @Value("${pin.lock-duration-minutes:5}")
+    private int pinLockDurationMinutes;
 
 
     private final BCryptPasswordEncoder passwordEncoder;
@@ -54,13 +63,13 @@ public class UserServiceImpl implements UserService {
 
     @Transactional
     @Override
-    public RegisterResponse register(UserRequest request, String role, String acceptLanguage) {
+    public AuthenticationResponse authenticate(UserRequest request, String role, String acceptLanguage) {
         if (request == null || role == null) {
             log.info("missing body error");
             throw new HttpMessageConversionException(EnumMessagesLangValues.MISSING_BODY
                     .getMessageByLang(acceptLanguage));
         }
-        log.info("request from controller for register : {}", request);
+        log.info("request from controller for authenticate : {}", request);
 
         if (request.getPhoneNumber() == null) {
             log.info("missing field error");
@@ -81,15 +90,14 @@ public class UserServiceImpl implements UserService {
             existingUser.setRole(role.toUpperCase());
             userRepository.save(existingUser);
             log.info("updated existing user: {}", existingUser);
-            String registerJwt = jwtService.generateRegisterToken(existingUser, REGISTER_TOKEN_EXPIRATION);
-            return RegisterResponse.builder()
-                    .registerToken(registerJwt)
-                    .message(EnumMessagesLangValues.REGISTER_SUCCESS_UPDATED.getMessageByLang(acceptLanguage))
-                    .build();
+            String authenticationJwt = jwtService.generateAuthenticationToken(existingUser, AUTHENTICATION_TOKEN_EXPIRATION);
+            return AuthenticationResponse.ofToken(
+                    authenticationJwt,
+                    EnumMessagesLangValues.REGISTER_SUCCESS_UPDATED.getMessageByLang(acceptLanguage));
         }
         User newUser = User.builder()
                 .phoneNumber(request.getPhoneNumber())
-                .password(UUID.randomUUID().toString())
+                .pin(UUID.randomUUID().toString())
                 .name(request.getName())
                 .surname(request.getSurname())
                 .createdAt(LocalDateTime.now())
@@ -98,22 +106,23 @@ public class UserServiceImpl implements UserService {
                 .build();
         userRepository.save(newUser);
         log.info("new user {}", newUser);
-        String registerJwt = jwtService.generateRegisterToken(newUser, REGISTER_TOKEN_EXPIRATION);
-        return RegisterResponse.builder()
-                .registerToken(registerJwt)
-                .message(EnumMessagesLangValues.REGISTER_SUCCESS.getMessageByLang(acceptLanguage))
-                .build();
+        String authenticationJwt = jwtService.generateAuthenticationToken(newUser, AUTHENTICATION_TOKEN_EXPIRATION);
+        return AuthenticationResponse.ofToken(
+                authenticationJwt,
+                EnumMessagesLangValues.REGISTER_SUCCESS.getMessageByLang(acceptLanguage));
     }
 
 
     @Override
+    @Transactional
     public UserResponse login(UserRequest request, String acceptLanguage) {
         if (request == null) {
             log.info("missing body error");
             throw new HttpMessageConversionException(EnumMessagesLangValues.MISSING_BODY.getMessageByLang(acceptLanguage));
         }
         log.info("request from controller for login : {}", request);
-        if (request.getPhoneNumber() == null || request.getPassword() == null) {
+        String credential = request.resolveCredential();
+        if (request.getPhoneNumber() == null || credential == null) {
             log.info("missing field error");
             throw new MissingFieldException(EnumMessagesLangValues.MISSING_USER_FIELDS.getMessageByLang(acceptLanguage));
         }
@@ -125,14 +134,23 @@ public class UserServiceImpl implements UserService {
             throw new UserNotFoundException(EnumMessagesLangValues.USER_NOT_FOUND.getMessageByLang(acceptLanguage));
         }
 
-        if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
-            log.info("wrong password error");
-            throw new WrongPasswordException(EnumMessagesLangValues.WRONG_PASSWORD.getMessageByLang(acceptLanguage));
+        LocalDateTime now = LocalDateTime.now();
+        clearExpiredPinLock(user, now);
+
+        if (isPinLocked(user, now)) {
+            throwPinLocked(user, acceptLanguage, now);
         }
+
+        if (!passwordEncoder.matches(credential, user.getPin())) {
+            handleWrongPin(user, acceptLanguage, now);
+        }
+
+        resetPinFailureState(user);
 
         String accessTokenJWT = jwtService.generateAccessToken(user, ACCESS_TOKEN_EXPIRATION);
 
-        RefreshToken refreshToken = refreshTokenService.createRefreshToken(user);
+        RefreshToken refreshToken = refreshTokenService.createRefreshToken(
+                user, request.getDeviceToken(), request.getPlatform());
 
         List<RefreshToken> refreshTokenList = user.getRefreshTokens();
         refreshTokenList.add(refreshToken);
@@ -165,16 +183,22 @@ public class UserServiceImpl implements UserService {
             throw new UserNotFoundException(EnumMessagesLangValues.USER_NOT_FOUND.getMessageByLang(acceptLanguage));
         }
 
-        RefreshToken refreshTokenEntity = refreshTokenRepository.findTopByUserIdOrderByCreatedAtDesc(userId);
+        RefreshToken refreshTokenEntity = refreshTokenRepository.findTopByUserIdAndRevokedAtIsNullOrderByCreatedAtDesc(userId);
+        if (refreshTokenEntity == null) {
+            refreshTokenEntity = refreshTokenRepository.findTopByUserIdOrderByCreatedAtDesc(userId);
+        }
 
         log.info("refresh token from repository : {}", refreshTokenEntity);
 
-        if (refreshTokenEntity == null) {
+        if (refreshTokenEntity == null || refreshTokenEntity.getRevokedAt() != null) {
             throw new RefreshTokenNotSetException(EnumMessagesLangValues.REFRESH_TOKEN_NOT_FOUND
                     .getMessageByLang(acceptLanguage));
         }
 
-        if (!refreshTokenEntity.getToken().equals(refreshToken.substring(7))) {
+        String raw = refreshToken != null && refreshToken.startsWith("Bearer ")
+                ? refreshToken.substring(7)
+                : refreshToken;
+        if (!refreshTokenEntity.getToken().equals(raw)) {
             throw new RefreshTokenNotSetException(EnumMessagesLangValues.REFRESH_TOKEN_NOT_FOUND
                     .getMessageByLang(acceptLanguage));
         }
@@ -195,7 +219,7 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional
-    public UserResponse setPassword(UserRequest userRequest, Long userId, String acceptLanguage) {
+    public UserResponse setPin(UserRequest userRequest, Long userId, String acceptLanguage) {
 
         User user = userRepository.findById(userId).orElseThrow(() ->
                 new UserNotFoundException(EnumMessagesLangValues.USER_NOT_FOUND.getMessageByLang(acceptLanguage)));
@@ -203,8 +227,10 @@ public class UserServiceImpl implements UserService {
         if (!user.getStatus().equals(UserStatus.OTP_VERIFIED.name())) {
             throw new InvalidStatusException(EnumMessagesLangValues.INVALID_USER_STATUS.getMessageByLang(acceptLanguage));
         }
-        String hashedPassword = passwordEncoder.encode(userRequest.getPassword());
-        user.setPassword(hashedPassword);
+        String credential = userRequest.resolveCredential();
+        PinValidator.validate(credential, acceptLanguage);
+        String hashedPin = passwordEncoder.encode(credential);
+        user.setPin(hashedPin);
         user.setStatus(UserStatus.ACTIVE.name());
 
         return UserResponse.builder()
@@ -217,7 +243,7 @@ public class UserServiceImpl implements UserService {
     }
 
     @Override
-    public RegisterResponse updatePassword(UserRequest userRequest, String acceptLanguage) {
+    public AuthenticationResponse updatePin(UserRequest userRequest, String acceptLanguage) {
         if (userRequest.getPhoneNumber() == null) {
             throw new MissingFieldException(EnumMessagesLangValues.MISSING_PHONE_NUMBER.getMessageByLang(acceptLanguage));
         }
@@ -229,11 +255,10 @@ public class UserServiceImpl implements UserService {
         }
 
         otpService.createOtp(user.getId(), acceptLanguage);
-        String registerJwt = jwtService.generateRegisterToken(user, REGISTER_TOKEN_EXPIRATION);
-        return RegisterResponse.builder()
-                .registerToken(registerJwt)
-                .message(EnumMessagesLangValues.OTP_SENT.getMessageByLang(acceptLanguage))
-                .build();
+        String authenticationJwt = jwtService.generateAuthenticationToken(user, AUTHENTICATION_TOKEN_EXPIRATION);
+        return AuthenticationResponse.ofToken(
+                authenticationJwt,
+                EnumMessagesLangValues.OTP_SENT.getMessageByLang(acceptLanguage));
     }
 
     @Override
@@ -258,10 +283,13 @@ public class UserServiceImpl implements UserService {
                 ? UserRoles.SUPER_ADMIN.name()
                 : UserRoles.ADMIN.name();
 
+        String credential = inviteRequest.resolveCredential();
+        PinValidator.validate(credential, acceptLanguage);
+
         User newUser = User.builder()
                 .name(inviteRequest.getName())
                 .surname(inviteRequest.getSurname())
-                .password(passwordEncoder.encode(inviteRequest.getPassword()))
+                .pin(passwordEncoder.encode(credential))
                 .phoneNumber(inviteRequest.getPhoneNumber())
                 .createdAt(LocalDateTime.now())
                 .role(newUserRole)
@@ -295,6 +323,57 @@ public class UserServiceImpl implements UserService {
         return UserResponse.builder()
                 .message(EnumMessagesLangValues.USER_SUCCESSFULLY_DELETED.getMessageByLang(acceptLanguage))
                 .build();
+    }
+
+    private void clearExpiredPinLock(User user, LocalDateTime now) {
+        if (user.getPinLockedUntil() != null && !user.getPinLockedUntil().isAfter(now)) {
+            user.setPinLockedUntil(null);
+        }
+    }
+
+    private boolean isPinLocked(User user, LocalDateTime now) {
+        return user.getPinLockedUntil() != null && user.getPinLockedUntil().isAfter(now);
+    }
+
+    private void throwPinLocked(User user, String acceptLanguage, LocalDateTime now) {
+        long remainingSeconds = Math.max(1, java.time.Duration.between(now, user.getPinLockedUntil()).getSeconds());
+        throw new PinLockedException(
+                EnumMessagesLangValues.PIN_LOCKED.getMessageByLang(acceptLanguage),
+                user.getPinLockedUntil(),
+                remainingSeconds
+        );
+    }
+
+    private void handleWrongPin(User user, String acceptLanguage, LocalDateTime now) {
+        log.info("wrong pin error userId={}", user.getId());
+
+        int attempts;
+        if (user.getLastFailedPinAt() == null
+                || user.getLastFailedPinAt().isBefore(now.minusMinutes(pinAttemptWindowMinutes))) {
+            attempts = 1;
+        } else {
+            int current = user.getFailedPinAttempts() == null ? 0 : user.getFailedPinAttempts();
+            attempts = current + 1;
+        }
+
+        user.setFailedPinAttempts(attempts);
+        user.setLastFailedPinAt(now);
+
+        if (attempts >= pinMaxAttempts) {
+            user.setPinLockedUntil(now.plusMinutes(pinLockDurationMinutes));
+            user.setFailedPinAttempts(0);
+            userRepository.save(user);
+            throwPinLocked(user, acceptLanguage, now);
+        }
+
+        userRepository.save(user);
+        throw new WrongPasswordException(EnumMessagesLangValues.WRONG_PASSWORD.getMessageByLang(acceptLanguage));
+    }
+
+    private void resetPinFailureState(User user) {
+        user.setFailedPinAttempts(0);
+        user.setLastFailedPinAt(null);
+        user.setPinLockedUntil(null);
     }
 
 }

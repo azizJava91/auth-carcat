@@ -16,4 +16,10 @@ public class ResponseException {
     private String message;
     private LocalDateTime timeStamp;
     private Integer status;
+    /** Present when PIN/login is temporarily locked (HTTP 429). */
+    private LocalDateTime lockedUntil;
+    /** Seconds left until unlock — for Flutter countdown / Retry-After. */
+    private Long remainingSeconds;
+    /** Alias used by PO contract (same as remainingSeconds). */
+    private Long retryAfter;
 }

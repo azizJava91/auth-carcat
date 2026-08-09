@@ -26,6 +26,20 @@ public class RefreshToken {
 
     LocalDateTime createdAt;
 
+    /**
+     * FCM / client device token (same value mobile sends to carland_service /device-tokens).
+     * Nullable for legacy logins that omit it.
+     */
+    @Column(name = "device_id")
+    String deviceId;
+
+    /** IOS / ANDROID (or whatever client sends). Nullable for legacy. */
+    String platform;
+
+    /** Soft revoke — row kept for login history; null = still usable. */
+    @Column(name = "revoked_at")
+    LocalDateTime revokedAt;
+
     @ManyToOne
     @JsonIgnore
     @JoinColumn(name = "user_id", nullable = false)

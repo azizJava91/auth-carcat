@@ -48,6 +48,19 @@ lsim:
 
 otp:
   expiration-minutes: 3
+  new:
+    resend-cooldown-seconds: 30
+    max-sends-per-window: 3
+    send-window-minutes: 15
+    phone-lock-minutes: 5
+    ip-lock-hours: 24
+    max-verify-attempts: 3
+    verify-lock-minutes: 5
+
+pin:
+  max-attempts: 3
+  attempt-window-minutes: 10
+  lock-duration-minutes: 5
 
 
 access:
@@ -56,7 +69,7 @@ access:
     expiration: 900 # 900 seconds 15 minutes
 
 
-register:
+authentication:
   token:
     secret-key: "6598b1401213c9204763656f5e1d8d863bb117bf7d962a7d477e927298459701"
     expiration: 360 # seconds 6 minutes
@@ -64,4 +77,4 @@ register:
 refresh:
   token:
     secret-key: "6598b1401213c9204763656f5e1d8d863bb117bf7d962a7d477e927298459722"
-    expiration:  2592000 # seconds = 1 month
+    expiration: 31536000 # seconds = 1 year (365 days)

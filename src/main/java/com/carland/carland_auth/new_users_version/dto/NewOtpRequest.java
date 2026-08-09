@@ -1,4 +1,4 @@
-package com.carland.carland_auth.dto.response;
+package com.carland.carland_auth.new_users_version.dto;
 
 import lombok.*;
 import lombok.experimental.FieldDefaults;
@@ -8,7 +8,8 @@ import lombok.experimental.FieldDefaults;
 @Builder
 @Data
 @FieldDefaults(level = AccessLevel.PRIVATE)
-public class RegisterResponse {
-    String registerToken;
-    String message;
+public class NewOtpRequest {
+    String authToken;
+    String otp;
+    String otpCode;
 }

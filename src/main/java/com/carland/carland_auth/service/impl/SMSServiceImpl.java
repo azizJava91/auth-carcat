@@ -87,4 +87,24 @@ public class SMSServiceImpl implements SMSService {
 //            throw new RuntimeException("SMS gönderilmedi");
 //        }
     }
+
+    @Override
+    public void sendOtpToPhone(String phoneNumber, String otpCode, String acceptLanguage) {
+        if (phoneNumber == null || phoneNumber.isBlank()) {
+            throw new MissingFieldException("Phone number boşdur");
+        }
+        if (otpCode == null || otpCode.isBlank()) {
+            throw new MissingFieldException("OTP boşdur");
+        }
+        String number = phoneNumber.startsWith("+") ? phoneNumber.substring(1) : phoneNumber;
+        String message = "CarCat otp kodunuz: " + otpCode;
+
+        String passMd5 = Md5Util.md5(password);
+        String raw = passMd5 + login + message + number + sender;
+        String key = Md5Util.md5(raw);
+
+        // Never log the OTP code in newUsers flow.
+        String response = lsimFeign.sendSms(login, number, message, sender, key, true);
+        log.info("LSIM response (newUsers): {}", response);
+    }
 }

@@ -24,11 +24,27 @@ public class CustomFilter extends OncePerRequestFilter {
 
     private static final Set<String> PUBLIC_PATHS = Set.of(
             "/api/v1/users/register",
+            "/api/v1/users/authentication",
             "/api/v1/users/login",
+            "/api/v1/users/update/password",
+            "/api/v1/users/update/pin",
             "/api/v1/users/updatePassword",
+            "/api/v1/newUsers/auth",
+            "/api/v1/newUsers/loginNew",
+            "/api/v1/newUsers/otp/createAndSendNew",
+            "/api/v1/newUsers/otp/verifyNew",
+            "/api/v1/newUsers/setPinCode",
             "/invite-ui/get",
             "/api/v1/users/getNameSurname",
             "/api/v1/users/list"
+    );
+
+    private static final Set<String> AUTH_TOKEN_PATHS = Set.of(
+            "/api/v1/otp/createAndSend",
+            "/api/v1/otp/verify",
+            "/api/v1/users/set/password",
+            "/api/v1/users/set/pin",
+            "/api/v1/users/setPassword"
     );
 
     @Override
@@ -58,15 +74,13 @@ public class CustomFilter extends OncePerRequestFilter {
         }
 
         try {
-            if (path.equals("/api/v1/otp/createAndSend")
-                    || path.equals("/api/v1/otp/verify")
-                    || path.equals("/api/v1/users/setPassword")) {
-                if (!jwtService.isRegisterTokenValid(token)) {
-                    writeErrorResponse(response, EnumMessagesLangValues.REGISTER_TOKEN_EXPIRED.getMessageByLang(lang));
+            if (AUTH_TOKEN_PATHS.contains(path)) {
+                if (!jwtService.isAuthenticationTokenValid(token)) {
+                    writeErrorResponse(response, EnumMessagesLangValues.AUTHENTICATION_TOKEN_EXPIRED.getMessageByLang(lang));
                     return;
                 }
                 UsernamePasswordAuthenticationToken auth =
-                        new UsernamePasswordAuthenticationToken("register-flow", null, List.of());
+                        new UsernamePasswordAuthenticationToken("authentication-flow", null, List.of());
                 SecurityContextHolder.getContext().setAuthentication(auth);
 
                 filterChain.doFilter(request, response);
@@ -76,7 +90,7 @@ public class CustomFilter extends OncePerRequestFilter {
             if (path.equals("/api/v1/users/refresh")) {
 
                 if (!jwtService.isRefreshTokenValid(token)) {
-                    writeErrorResponse(response, EnumMessagesLangValues.REGISTER_TOKEN_EXPIRED.getMessageByLang(lang));
+                    writeErrorResponse(response, EnumMessagesLangValues.AUTHENTICATION_TOKEN_EXPIRED.getMessageByLang(lang));
                     return;
                 }
                 UsernamePasswordAuthenticationToken auth =
@@ -125,5 +139,3 @@ public class CustomFilter extends OncePerRequestFilter {
                 """.formatted(message, java.time.LocalDateTime.now()));
     }
 }
-
-

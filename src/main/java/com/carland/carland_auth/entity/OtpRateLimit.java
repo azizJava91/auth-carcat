@@ -12,19 +12,27 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE)
-@Table(name = "otps")
-public class Otp {
+@Table(name = "otp_rate_limits")
+public class OtpRateLimit {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     Long id;
-    /** Plaintext for legacy OTP; SHA-256 hex for newUsers OTP. */
-    String code;
-    String status;
-    LocalDateTime createdAt;
-    Long userId;
-    /** Set for newUsers flow when user may not exist yet. */
+
+    @Column(nullable = false, unique = true)
     String phoneNumber;
-    /** true = code column is SHA-256 hex (newUsers). */
+
+    String lastIp;
+
     @Builder.Default
-    Boolean hashed = false;
+    Integer sendCount = 0;
+
+    LocalDateTime sendWindowStart;
+    LocalDateTime lastSentAt;
+    LocalDateTime phoneLockedUntil;
+
+    @Builder.Default
+    Integer verifyFailCount = 0;
+
+    LocalDateTime verifyLockedUntil;
 }
