@@ -101,9 +101,12 @@ public class NewUsersService {
         User user = userRepository.findByPhoneNumber(phone);
         boolean hasPin = user != null && user.getPinHash() != null && !user.getPinHash().isBlank();
         boolean deleted = user != null && UserStatus.DELETED.name().equalsIgnoreCase(user.getStatus());
+        boolean active = user != null && UserStatus.ACTIVE.name().equalsIgnoreCase(user.getStatus());
+        // PIN_CHECK only for ACTIVE + pin_hash. OTP_VERIFIED (left before setPin) → SEND_OTP.
+        boolean pinCheckEligible = hasPin && active && !deleted;
 
-        // RESET: if no account / no PIN → treat as REGISTER (PO CRCT-182). No 404.
-        if (PURPOSE_RESET.equals(requestedPurpose) && hasPin && !deleted) {
+        // RESET: if no account / no usable PIN → treat as REGISTER (PO CRCT-182). No 404.
+        if (PURPOSE_RESET.equals(requestedPurpose) && pinCheckEligible) {
             String token = jwtService.generatePhoneAuthToken(phone, PURPOSE_RESET, authTokenExpiration);
             return AuthFlowResponse.builder()
                     .authToken(token)
@@ -113,7 +116,7 @@ public class NewUsersService {
                     .build();
         }
 
-        if (hasPin && !deleted) {
+        if (pinCheckEligible) {
             String token = jwtService.generatePhoneAuthToken(phone, PURPOSE_REGISTER, authTokenExpiration);
             return AuthFlowResponse.builder()
                     .authToken(token)
@@ -368,8 +371,10 @@ public class NewUsersService {
         IpOtpRateLimit ipLimit = ipOtpRateLimitRepository.findByIpAddress(ip)
                 .orElseGet(() -> IpOtpRateLimit.builder().ipAddress(ip).sendCount(0).build());
         if (ipLimit.getLockedUntil() != null && ipLimit.getLockedUntil().isAfter(now)) {
-            // PO: IP lock — generic message, no countdown
-            throw new AuthApiException(null, "Too many attempts. Please try again later.", HttpStatus.TOO_MANY_REQUESTS);
+            long rem = Math.max(1, java.time.Duration.between(now, ipLimit.getLockedUntil()).getSeconds());
+            throw new AuthApiException("LOGIN_LOCKED",
+                    "Too many attempts. Please try again later.",
+                    HttpStatus.TOO_MANY_REQUESTS, ipLimit.getLockedUntil(), rem);
         }
 
         OtpRateLimit phoneLimit = otpRateLimitRepository.findByPhoneNumber(phone)
@@ -411,7 +416,10 @@ public class NewUsersService {
                 && ipLimit.getSendCount() >= maxSendsPerWindow * 5) {
             ipLimit.setLockedUntil(now.plusHours(ipLockHours));
             ipOtpRateLimitRepository.save(ipLimit);
-            throw new AuthApiException(null, "Too many attempts. Please try again later.", HttpStatus.TOO_MANY_REQUESTS);
+            long rem = Math.max(1, java.time.Duration.between(now, ipLimit.getLockedUntil()).getSeconds());
+            throw new AuthApiException("LOGIN_LOCKED",
+                    "Too many attempts. Please try again later.",
+                    HttpStatus.TOO_MANY_REQUESTS, ipLimit.getLockedUntil(), rem);
         }
     }
 

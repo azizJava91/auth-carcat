@@ -6,6 +6,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -16,6 +18,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Service
 public class AuthEndpointRateLimiter {
+
+    private static final long WINDOW_MS = 60_000L;
 
     @Value("${auth.rate-limit.phone-per-minute:10}")
     private int phonePerMinute;
@@ -28,24 +32,26 @@ public class AuthEndpointRateLimiter {
 
     public void check(String phone, String ip) {
         long now = Instant.now().toEpochMilli();
-        long windowStart = now - 60_000L;
-        if (!allow(phoneHits, phone == null ? "unknown" : phone, now, windowStart, phonePerMinute)) {
-            throw new AuthApiException("LOGIN_LOCKED", "Too many attempts. Please try again later.", HttpStatus.TOO_MANY_REQUESTS);
-        }
-        if (!allow(ipHits, ip == null ? "unknown" : ip, now, windowStart, ipPerMinute)) {
-            throw new AuthApiException(null, "Too many attempts. Please try again later.", HttpStatus.TOO_MANY_REQUESTS);
-        }
+        long windowStart = now - WINDOW_MS;
+        rejectIfLimited(phoneHits, phone == null ? "unknown" : phone, now, windowStart, phonePerMinute);
+        rejectIfLimited(ipHits, ip == null ? "unknown" : ip, now, windowStart, ipPerMinute);
     }
 
-    private boolean allow(Map<String, List<Long>> store, String key, long now, long windowStart, int max) {
+    private void rejectIfLimited(Map<String, List<Long>> store, String key, long now, long windowStart, int max) {
         List<Long> times = store.computeIfAbsent(key, k -> new ArrayList<>());
         synchronized (times) {
             times.removeIf(t -> t < windowStart);
             if (times.size() >= max) {
-                return false;
+                long oldest = times.stream().mapToLong(Long::longValue).min().orElse(now);
+                long unlockAtMs = oldest + WINDOW_MS;
+                long rem = Math.max(1, (unlockAtMs - now + 999) / 1000);
+                LocalDateTime lockedUntil = LocalDateTime.ofInstant(
+                        Instant.ofEpochMilli(unlockAtMs), ZoneId.systemDefault());
+                throw new AuthApiException("LOGIN_LOCKED",
+                        "Too many attempts. Please try again later.",
+                        HttpStatus.TOO_MANY_REQUESTS, lockedUntil, rem);
             }
             times.add(now);
-            return true;
         }
     }
 }
