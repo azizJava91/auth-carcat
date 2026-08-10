@@ -36,6 +36,9 @@ public class UserRequest {
     @JsonAlias({"authenticationToken", "registerToken"})
     String authToken;
 
+    /** NewUsers setPinCode — token from /otp/verify response. */
+    String pinSetupToken;
+
     public String resolveCredential() {
         if (pinCode != null && !pinCode.isBlank()) {
             return pinCode;

@@ -237,9 +237,9 @@ public class NewUsersService {
 
         otpVerifyAttemptService.clearVerifyCounters(phone);
 
-        String setPinToken = jwtService.generatePhoneAuthToken(phone, purpose + "|" + STAGE_SET_PIN, authTokenExpiration);
+        String pinSetupToken = jwtService.generatePhoneAuthToken(phone, purpose + "|" + STAGE_SET_PIN, authTokenExpiration);
         return AuthFlowResponse.builder()
-                .authToken(setPinToken)
+                .pinSetupToken(pinSetupToken)
                 .next(NEXT_SET_PIN)
                 .purpose(purpose)
                 .message(EnumMessagesLangValues.OTP_VERIFIED_SUCCESS.getMessageByLang(acceptLanguage))
@@ -251,11 +251,11 @@ public class NewUsersService {
         if (request == null) {
             throw new HttpMessageConversionException(EnumMessagesLangValues.MISSING_BODY.getMessageByLang(acceptLanguage));
         }
-        String authToken = requireAuthTokenBody(request.getAuthToken());
-        assertNotConsumed(authToken);
-        jwtService.assertPhoneAuthToken(authToken);
+        String pinSetupToken = requireAuthTokenBody(request.getPinSetupToken());
+        assertNotConsumed(pinSetupToken);
+        jwtService.assertPhoneAuthToken(pinSetupToken);
 
-        String purposeRaw = jwtService.extractAndLogPurposeFromAuthToken(authToken);
+        String purposeRaw = jwtService.extractAndLogPurposeFromAuthToken(pinSetupToken);
         if (purposeRaw == null || !purposeRaw.contains(STAGE_SET_PIN)) {
             throw new AuthApiException("INVALID_TOKEN", "Your session expired. Please start again.", HttpStatus.UNAUTHORIZED);
         }
@@ -264,7 +264,7 @@ public class NewUsersService {
         String pinCode = request.resolveCredential();
         PinValidator.validateNewUsersPin(pinCode);
 
-        String phone = jwtService.extractPhoneFromAuthToken(authToken);
+        String phone = jwtService.extractPhoneFromAuthToken(pinSetupToken);
         User user = userRepository.findByPhoneNumber(phone);
         if (user == null) {
             throw new AuthApiException("INVALID_TOKEN", "Your session expired. Please start again.", HttpStatus.UNAUTHORIZED);
@@ -282,7 +282,7 @@ public class NewUsersService {
             refreshTokenRepository.revokeAllExceptDevice(user.getId(), request.getDeviceId(), LocalDateTime.now());
         }
 
-        consumeAuthToken(authToken);
+        consumeAuthToken(pinSetupToken);
         return PinSetResponse.builder().status("PIN_SET").build();
     }
 

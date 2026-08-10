@@ -80,8 +80,8 @@ public class OpenApiConfig {
                                 PO parallel flow under `/api/v1/newUsers`:
                                 1. POST /auth → authToken + next (SEND_OTP | PIN_CHECK); purpose in JWT
                                 2. POST /otp/createAndSend { authToken } → next VERIFY_OTP
-                                3. POST /otp/verify { authToken, otp } → next SET_PIN
-                                4. PUT /setPinCode { authToken, pinCode } → status PIN_SET
+                                3. POST /otp/verify { authToken, otp } → pinSetupToken + next SET_PIN
+                                4. PUT /setPinCode { pinSetupToken, pinCode } → status PIN_SET
                                 5. POST /login { phoneNumber, pinCode, deviceId }
                                 """))
                 .build();

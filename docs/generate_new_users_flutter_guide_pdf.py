@@ -112,8 +112,8 @@ def build():
         "   → next=SEND_OTP, authToken, purpose=REGISTER\n"
         "2) POST /otp/createAndSend { authToken } → next=VERIFY_OTP\n"
         "3) POST /otp/verify { authToken, otp }\n"
-        "   → next=SET_PIN, NEW authToken (replace old)\n"
-        "4) PUT /setPinCode { authToken, pinCode } → { status: PIN_SET }\n"
+        "   → next=SET_PIN, pinSetupToken (not authToken)\n"
+        "4) PUT /setPinCode { pinSetupToken, pinCode } → { status: PIN_SET }\n"
         "5) POST /login { phoneNumber, pinCode, deviceId, platform? }\n"
         "   → accessToken + refreshToken"
     )
@@ -156,7 +156,7 @@ def build():
     pdf.code('{\n  "authToken": "<from /auth>",\n  "otp": "123456"\n}')
     pdf.code(
         '{\n'
-        '  "authToken": "<NEW jwt for setPinCode>",\n'
+        '  "pinSetupToken": "<jwt for setPinCode>",\n'
         '  "next": "SET_PIN",\n'
         '  "purpose": "REGISTER" | "RESET",\n'
         '  "message": "..."\n'
@@ -165,8 +165,8 @@ def build():
     pdf.bullet("401 OTP_INCORRECT; 429 OTP_VERIFY_LOCKED (~300s); 400 OTP_EXPIRED")
 
     pdf.h2("A4) PUT /api/v1/newUsers/setPinCode")
-    pdf.bullet("No query purpose — purpose is inside authToken JWT")
-    pdf.code('{\n  "authToken": "<from verify>",\n  "pinCode": "2580"\n}')
+    pdf.bullet("No query purpose — purpose is inside pinSetupToken JWT")
+    pdf.code('{\n  "pinSetupToken": "<from verify>",\n  "pinCode": "2580"\n}')
     pdf.code('{\n  "status": "PIN_SET"\n}')
     pdf.bullet("400 WEAK_PIN / PIN_LENGTH_ERROR")
     pdf.bullet("Then MUST call login (no tokens from this step)")
@@ -213,7 +213,7 @@ def build():
     pdf.bullet("Forgot password still: updatePassword → OTP → setPassword")
 
     pdf.h2("D) Flutter checklist (NewUsers)")
-    pdf.bullet("Persist authToken; replace after verify")
+    pdf.bullet("Persist authToken for OTP steps; after verify use pinSetupToken")
     pdf.bullet("Drive UI from next")
     pdf.bullet("Do not send purpose query on setPinCode")
     pdf.bullet("After PIN_SET always call login")
