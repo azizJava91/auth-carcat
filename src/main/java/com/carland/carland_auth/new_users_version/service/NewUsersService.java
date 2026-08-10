@@ -7,11 +7,15 @@ import com.carland.carland_auth.enums.EnumMessagesLangValues;
 import com.carland.carland_auth.enums.OtpStatus;
 import com.carland.carland_auth.enums.UserRoles;
 import com.carland.carland_auth.enums.UserStatus;
-import com.carland.carland_auth.exceptions.*;
+import com.carland.carland_auth.exceptions.AuthApiException;
+import com.carland.carland_auth.exceptions.PinLockedException;
 import com.carland.carland_auth.jwt.JWTService;
 import com.carland.carland_auth.new_users_version.dto.AuthFlowResponse;
 import com.carland.carland_auth.new_users_version.dto.NewOtpRequest;
+import com.carland.carland_auth.new_users_version.dto.PinSetResponse;
 import com.carland.carland_auth.repository.*;
+import com.carland.carland_auth.service.AuthEndpointRateLimiter;
+import com.carland.carland_auth.service.OtpVerifyAttemptService;
 import com.carland.carland_auth.service.PinAttemptService;
 import com.carland.carland_auth.service.interfaces.RefreshTokenService;
 import com.carland.carland_auth.service.interfaces.SMSService;
@@ -22,14 +26,14 @@ import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.HttpMessageConversionException;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Random;
-import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -39,6 +43,7 @@ public class NewUsersService {
     public static final String NEXT_SEND_OTP = "SEND_OTP";
     public static final String NEXT_PIN_CHECK = "PIN_CHECK";
     public static final String NEXT_SET_PIN = "SET_PIN";
+    public static final String NEXT_VERIFY_OTP = "VERIFY_OTP";
     public static final String PURPOSE_REGISTER = "REGISTER";
     public static final String PURPOSE_RESET = "RESET";
     public static final String STAGE_SET_PIN = "SET_PIN";
@@ -67,12 +72,6 @@ public class NewUsersService {
     @Value("${otp.new.ip-lock-hours:24}")
     private int ipLockHours;
 
-    @Value("${otp.new.max-verify-attempts:3}")
-    private int maxVerifyAttempts;
-
-    @Value("${otp.new.verify-lock-minutes:5}")
-    private int verifyLockMinutes;
-
     private final UserRepository userRepository;
     private final JWTService jwtService;
     private final OtpRepository otpRepository;
@@ -82,25 +81,30 @@ public class NewUsersService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final RefreshTokenService refreshTokenService;
     private final SMSService smsService;
-    private final BCryptPasswordEncoder passwordEncoder;
+    private final Argon2PasswordEncoder argon2PasswordEncoder;
     private final PinAttemptService pinAttemptService;
+    private final OtpVerifyAttemptService otpVerifyAttemptService;
+    private final AuthEndpointRateLimiter authEndpointRateLimiter;
 
-    public AuthFlowResponse auth(UserRequest request, String acceptLanguage) {
+    public AuthFlowResponse auth(UserRequest request, HttpServletRequest httpRequest, String acceptLanguage) {
         if (request == null) {
             throw new HttpMessageConversionException(EnumMessagesLangValues.MISSING_BODY.getMessageByLang(acceptLanguage));
         }
-        if (request.getPhoneNumber() == null || request.getPhoneNumber().isBlank()) {
-            throw new MissingFieldException(EnumMessagesLangValues.MISSING_PHONE_NUMBER.getMessageByLang(acceptLanguage));
+        String phone = normalizePhone(request.getPhoneNumber());
+        if (phone == null) {
+            throw new AuthApiException("INVALID_PHONE", "Invalid phone number.", HttpStatus.BAD_REQUEST);
         }
 
-        String purpose = normalizePurpose(request.getPurpose());
-        User user = userRepository.findByPhoneNumber(request.getPhoneNumber());
+        authEndpointRateLimiter.check(phone, resolveClientIp(httpRequest));
 
-        if (PURPOSE_RESET.equals(purpose)) {
-            if (user == null || UserStatus.DELETED.name().equalsIgnoreCase(user.getStatus())) {
-                throw new UserNotFoundException(EnumMessagesLangValues.USER_NOT_FOUND.getMessageByLang(acceptLanguage));
-            }
-            String token = jwtService.generatePhoneAuthToken(request.getPhoneNumber(), PURPOSE_RESET, authTokenExpiration);
+        String requestedPurpose = request.getPurpose() == null ? null : request.getPurpose().trim().toUpperCase();
+        User user = userRepository.findByPhoneNumber(phone);
+        boolean hasPin = user != null && user.getPinHash() != null && !user.getPinHash().isBlank();
+        boolean deleted = user != null && UserStatus.DELETED.name().equalsIgnoreCase(user.getStatus());
+
+        // RESET: if no account / no PIN → treat as REGISTER (PO CRCT-182). No 404.
+        if (PURPOSE_RESET.equals(requestedPurpose) && hasPin && !deleted) {
+            String token = jwtService.generatePhoneAuthToken(phone, PURPOSE_RESET, authTokenExpiration);
             return AuthFlowResponse.builder()
                     .authToken(token)
                     .next(NEXT_SEND_OTP)
@@ -109,8 +113,8 @@ public class NewUsersService {
                     .build();
         }
 
-        if (user != null && UserStatus.ACTIVE.name().equalsIgnoreCase(user.getStatus())) {
-            String token = jwtService.generatePhoneAuthToken(request.getPhoneNumber(), PURPOSE_REGISTER, authTokenExpiration);
+        if (hasPin && !deleted) {
+            String token = jwtService.generatePhoneAuthToken(phone, PURPOSE_REGISTER, authTokenExpiration);
             return AuthFlowResponse.builder()
                     .authToken(token)
                     .next(NEXT_PIN_CHECK)
@@ -119,7 +123,7 @@ public class NewUsersService {
                     .build();
         }
 
-        String token = jwtService.generatePhoneAuthToken(request.getPhoneNumber(), PURPOSE_REGISTER, authTokenExpiration);
+        String token = jwtService.generatePhoneAuthToken(phone, PURPOSE_REGISTER, authTokenExpiration);
         return AuthFlowResponse.builder()
                 .authToken(token)
                 .next(NEXT_SEND_OTP)
@@ -129,66 +133,74 @@ public class NewUsersService {
     }
 
     @Transactional
-    public AuthFlowResponse createAndSendNew(NewOtpRequest request, HttpServletRequest httpRequest, String acceptLanguage) {
-        String authToken = requireAuthToken(request == null ? null : request.getAuthToken(), acceptLanguage);
-        assertNotConsumed(authToken, acceptLanguage);
-        assertPhoneAuthValid(authToken, acceptLanguage);
+    public AuthFlowResponse createAndSend(NewOtpRequest request, HttpServletRequest httpRequest, String acceptLanguage) {
+        String authToken = requireAuthToken(request);
+        assertNotConsumed(authToken);
+        jwtService.assertPhoneAuthToken(authToken);
 
         String phone = jwtService.extractPhoneFromAuthToken(authToken);
+        String purposeRaw = jwtService.extractAndLogPurposeFromAuthToken(authToken);
         String ip = resolveClientIp(httpRequest);
         LocalDateTime now = LocalDateTime.now();
 
         enforceSendLimits(phone, ip, now, acceptLanguage);
 
-        String code = generateOtpCode();
-        String codeHash = HashUtil.sha256Hex(code);
+        // Invalidate previous pending codes for this phone
+        List<Otp> pending = otpRepository.findAllByPhoneNumberAndStatus(phone, OtpStatus.PENDING.name());
+        pending.forEach(o -> o.setStatus(OtpStatus.FAIL.name()));
+        otpRepository.saveAll(pending);
 
-        Otp otp = Otp.builder()
-                .code(codeHash)
+        String code = generateOtpCode();
+        otpRepository.save(Otp.builder()
+                .code(HashUtil.sha256Hex(code))
                 .hashed(true)
                 .status(OtpStatus.PENDING.name())
                 .createdAt(now)
                 .phoneNumber(phone)
-                .build();
-        otpRepository.save(otp);
+                .build());
 
         smsService.sendOtpToPhone(phone, code, acceptLanguage);
         recordSuccessfulSend(phone, ip, now);
 
         return AuthFlowResponse.builder()
                 .authToken(authToken)
-                .next(NEXT_SEND_OTP)
-                .purpose(jwtService.extractPurposeFromAuthToken(authToken))
+                .next(NEXT_VERIFY_OTP)
+                .purpose(stripStage(purposeRaw))
                 .message(EnumMessagesLangValues.OTP_SENT.getMessageByLang(acceptLanguage))
                 .build();
     }
 
     @Transactional
-    public AuthFlowResponse verifyNew(NewOtpRequest request, String acceptLanguage) {
+    public AuthFlowResponse verify(NewOtpRequest request, String acceptLanguage) {
         if (request == null) {
             throw new HttpMessageConversionException(EnumMessagesLangValues.MISSING_BODY.getMessageByLang(acceptLanguage));
         }
-        String authToken = requireAuthToken(request.getAuthToken(), acceptLanguage);
-        assertNotConsumed(authToken, acceptLanguage);
-        assertPhoneAuthValid(authToken, acceptLanguage);
+        String authToken = requireAuthToken(request);
+        assertNotConsumed(authToken);
+        jwtService.assertPhoneAuthToken(authToken);
 
         String otpCode = request.getOtp() != null ? request.getOtp() : request.getOtpCode();
         if (otpCode == null || otpCode.isBlank()) {
-            throw new MissingFieldException(EnumMessagesLangValues.MISSING_FIELDS.getMessageByLang(acceptLanguage));
+            throw new AuthApiException("OTP_INCORRECT", "Incorrect verification code. Please try again.", HttpStatus.UNAUTHORIZED);
         }
 
         String phone = jwtService.extractPhoneFromAuthToken(authToken);
-        String purpose = jwtService.extractPurposeFromAuthToken(authToken);
+        String purposeRaw = jwtService.extractAndLogPurposeFromAuthToken(authToken);
+        String purpose = stripStage(purposeRaw);
         LocalDateTime now = LocalDateTime.now();
 
         OtpRateLimit rate = otpRateLimitRepository.findByPhoneNumber(phone).orElse(null);
         if (rate != null && rate.getVerifyLockedUntil() != null && rate.getVerifyLockedUntil().isAfter(now)) {
-            throwLocked(rate.getVerifyLockedUntil(), acceptLanguage, now);
+            long rem = Math.max(1, java.time.Duration.between(now, rate.getVerifyLockedUntil()).getSeconds());
+            throw new AuthApiException("OTP_VERIFY_LOCKED",
+                    "You've reached the maximum number of attempts. Please try again when the restriction ends.",
+                    HttpStatus.TOO_MANY_REQUESTS, rate.getVerifyLockedUntil(), rem);
         }
 
         Otp otpLast = otpRepository.findTopByPhoneNumberAndStatusOrderByCreatedAtDesc(phone, OtpStatus.PENDING.name());
         if (otpLast == null) {
-            throw new InvalidOtpCodeException(EnumMessagesLangValues.INVALID_OTP_CODE.getMessageByLang(acceptLanguage));
+            recordWrongVerifyOrThrow(phone);
+            throw new AuthApiException("OTP_INCORRECT", "Incorrect verification code. Please try again.", HttpStatus.UNAUTHORIZED);
         }
 
         boolean match = Boolean.TRUE.equals(otpLast.getHashed())
@@ -196,27 +208,24 @@ public class NewUsersService {
                 : otpCode.equals(otpLast.getCode());
 
         if (!match) {
-            handleWrongOtpVerify(phone, now, acceptLanguage);
+            recordWrongVerifyOrThrow(phone);
+            throw new AuthApiException("OTP_INCORRECT", "Incorrect verification code. Please try again.", HttpStatus.UNAUTHORIZED);
         }
 
         if (now.isAfter(otpLast.getCreatedAt().plusMinutes(otpExpirationMinutes))) {
-            throw new ExpiredOtpException(EnumMessagesLangValues.EXPIRED_OTP.getMessageByLang(acceptLanguage));
+            throw new AuthApiException("OTP_EXPIRED", "This code has expired. Please request a new one.", HttpStatus.BAD_REQUEST);
         }
 
         User user = userRepository.findByPhoneNumber(phone);
         if (user == null) {
             user = User.builder()
                     .phoneNumber(phone)
-                    .pin(UUID.randomUUID().toString())
                     .createdAt(now)
                     .role(UserRoles.USER.name())
                     .status(UserStatus.OTP_VERIFIED.name())
                     .build();
             userRepository.save(user);
-        } else {
-            if (UserStatus.DELETED.name().equalsIgnoreCase(user.getStatus())) {
-                throw new UserNotFoundException(EnumMessagesLangValues.USER_NOT_FOUND.getMessageByLang(acceptLanguage));
-            }
+        } else if (!UserStatus.DELETED.name().equalsIgnoreCase(user.getStatus())) {
             user.setStatus(UserStatus.OTP_VERIFIED.name());
             userRepository.save(user);
         }
@@ -226,11 +235,9 @@ public class NewUsersService {
                 ? OtpStatus.SUCCESS.name() : OtpStatus.FAIL.name()));
         otpRepository.saveAll(pending);
 
-        clearOtpCounters(phone);
+        otpVerifyAttemptService.clearVerifyCounters(phone);
 
-        // Issue stage token for setPinCode (single-use after set).
         String setPinToken = jwtService.generatePhoneAuthToken(phone, purpose + "|" + STAGE_SET_PIN, authTokenExpiration);
-
         return AuthFlowResponse.builder()
                 .authToken(setPinToken)
                 .next(NEXT_SET_PIN)
@@ -240,77 +247,68 @@ public class NewUsersService {
     }
 
     @Transactional
-    public UserResponse setPinCode(UserRequest request, String purposeParam, String acceptLanguage) {
+    public PinSetResponse setPinCode(UserRequest request, String acceptLanguage) {
         if (request == null) {
             throw new HttpMessageConversionException(EnumMessagesLangValues.MISSING_BODY.getMessageByLang(acceptLanguage));
         }
-        if (purposeParam == null || purposeParam.isBlank()) {
-            throw new MissingFieldException(EnumMessagesLangValues.MISSING_FIELDS.getMessageByLang(acceptLanguage));
-        }
-        String purpose = purposeParam.trim().toUpperCase();
-        if (!PURPOSE_REGISTER.equals(purpose) && !PURPOSE_RESET.equals(purpose)) {
-            throw new MissingFieldException(EnumMessagesLangValues.MISSING_FIELDS.getMessageByLang(acceptLanguage));
-        }
+        String authToken = requireAuthTokenBody(request.getAuthToken());
+        assertNotConsumed(authToken);
+        jwtService.assertPhoneAuthToken(authToken);
 
-        String authToken = requireAuthToken(request.getAuthToken(), acceptLanguage);
-        assertNotConsumed(authToken, acceptLanguage);
-        assertPhoneAuthValid(authToken, acceptLanguage);
-
-        // Token must be the one issued after verifyNew (stage SET_PIN).
-        String purposeRaw = jwtService.extractPurposeFromAuthToken(authToken);
+        String purposeRaw = jwtService.extractAndLogPurposeFromAuthToken(authToken);
         if (purposeRaw == null || !purposeRaw.contains(STAGE_SET_PIN)) {
-            throw new InvalidStatusException(EnumMessagesLangValues.INVALID_USER_STATUS.getMessageByLang(acceptLanguage));
+            throw new AuthApiException("INVALID_TOKEN", "Your session expired. Please start again.", HttpStatus.UNAUTHORIZED);
         }
+        String purpose = stripStage(purposeRaw);
 
         String pinCode = request.resolveCredential();
-        PinValidator.validate(pinCode, acceptLanguage);
+        PinValidator.validateNewUsersPin(pinCode);
 
         String phone = jwtService.extractPhoneFromAuthToken(authToken);
         User user = userRepository.findByPhoneNumber(phone);
         if (user == null) {
-            throw new UserNotFoundException(EnumMessagesLangValues.USER_NOT_FOUND.getMessageByLang(acceptLanguage));
+            throw new AuthApiException("INVALID_TOKEN", "Your session expired. Please start again.", HttpStatus.UNAUTHORIZED);
         }
 
-        user.setPin(passwordEncoder.encode(pinCode));
+        boolean hadPin = user.getPinHash() != null && !user.getPinHash().isBlank();
+        user.setPinHash(argon2PasswordEncoder.encode(pinCode));
         user.setStatus(UserStatus.ACTIVE.name());
         user.setFailedPinAttempts(0);
         user.setLastFailedPinAt(null);
         user.setPinLockedUntil(null);
         userRepository.save(user);
 
-        if (PURPOSE_RESET.equals(purpose)) {
-            refreshTokenRepository.revokeAllExceptDevice(user.getId(), request.getDeviceToken(), LocalDateTime.now());
+        if (PURPOSE_RESET.equals(purpose) || hadPin) {
+            refreshTokenRepository.revokeAllExceptDevice(user.getId(), request.getDeviceId(), LocalDateTime.now());
         }
 
         consumeAuthToken(authToken);
-
-        return UserResponse.builder()
-                .message(EnumMessagesLangValues.PASSWORD_SET_SUCCESS.getMessageByLang(acceptLanguage))
-                .role(user.getRole())
-                .name(user.getName())
-                .surname(user.getSurname())
-                .phoneNumber(user.getPhoneNumber())
-                .userId(user.getId())
-                .build();
+        return PinSetResponse.builder().status("PIN_SET").build();
     }
 
     @Transactional
-    public UserResponse loginNew(UserRequest request, String acceptLanguage) {
+    public UserResponse login(UserRequest request, String acceptLanguage) {
         if (request == null) {
             throw new HttpMessageConversionException(EnumMessagesLangValues.MISSING_BODY.getMessageByLang(acceptLanguage));
         }
+        String phone = normalizePhone(request.getPhoneNumber());
         String pinCode = request.resolveCredential();
-        if (request.getPhoneNumber() == null || pinCode == null) {
-            throw new MissingFieldException(EnumMessagesLangValues.MISSING_USER_FIELDS.getMessageByLang(acceptLanguage));
+        if (phone == null || pinCode == null) {
+            throw new AuthApiException("PIN_INCORRECT", "Incorrect PIN. Please try again.", HttpStatus.UNAUTHORIZED);
         }
-        if (request.getDeviceToken() == null || request.getDeviceToken().isBlank()
-                || request.getPlatform() == null || request.getPlatform().isBlank()) {
-            throw new MissingFieldException(EnumMessagesLangValues.DEVICE_REQUIRED.getMessageByLang(acceptLanguage));
+        if (request.getDeviceId() == null || request.getDeviceId().isBlank()) {
+            throw new AuthApiException("INVALID_TOKEN", "deviceId is required.", HttpStatus.BAD_REQUEST);
         }
 
-        User user = userRepository.findByPhoneNumberAndStatus(request.getPhoneNumber(), UserStatus.ACTIVE.name());
-        if (user == null) {
-            throw new UserNotFoundException(EnumMessagesLangValues.USER_NOT_FOUND.getMessageByLang(acceptLanguage));
+        User user = userRepository.findByPhoneNumber(phone);
+        if (user == null || UserStatus.DELETED.name().equalsIgnoreCase(user.getStatus())) {
+            throw new AuthApiException("PIN_NOT_SET", "PIN is not set for this account.", HttpStatus.UNAUTHORIZED);
+        }
+        if (!UserStatus.ACTIVE.name().equalsIgnoreCase(user.getStatus())) {
+            throw new AuthApiException("PIN_NOT_SET", "PIN is not set for this account.", HttpStatus.UNAUTHORIZED);
+        }
+        if (user.getPinHash() == null || user.getPinHash().isBlank()) {
+            throw new AuthApiException("PIN_NOT_SET", "PIN is not set for this account.", HttpStatus.UNAUTHORIZED);
         }
 
         LocalDateTime now = LocalDateTime.now();
@@ -318,25 +316,27 @@ public class NewUsersService {
         user = userRepository.findById(user.getId()).orElseThrow();
 
         if (user.getPinLockedUntil() != null && user.getPinLockedUntil().isAfter(now)) {
-            throwLocked(user.getPinLockedUntil(), acceptLanguage, now);
+            long rem = Math.max(1, java.time.Duration.between(now, user.getPinLockedUntil()).getSeconds());
+            throw new PinLockedException(
+                    "You've reached the maximum number of attempts. Please try again when the restriction ends.",
+                    user.getPinLockedUntil(), rem);
         }
 
-        if (!passwordEncoder.matches(pinCode, user.getPin())) {
+        if (!argon2PasswordEncoder.matches(pinCode, user.getPinHash())) {
             PinAttemptService.Result result = pinAttemptService.recordWrongPin(user.getId());
             if (result.locked()) {
                 throw new PinLockedException(
-                        EnumMessagesLangValues.PIN_LOCKED.getMessageByLang(acceptLanguage),
-                        result.lockedUntil(),
-                        result.remainingSeconds());
+                        "You've reached the maximum number of attempts. Please try again when the restriction ends.",
+                        result.lockedUntil(), result.remainingSeconds());
             }
-            throw new WrongPasswordException(EnumMessagesLangValues.WRONG_PASSWORD.getMessageByLang(acceptLanguage));
+            throw new AuthApiException("PIN_INCORRECT", "Incorrect PIN. Please try again.", HttpStatus.UNAUTHORIZED);
         }
 
         pinAttemptService.clearFailureState(user.getId());
 
         String accessToken = jwtService.generateAccessToken(user, accessTokenExpiration);
         RefreshToken refreshToken = refreshTokenService.createRefreshToken(
-                user, request.getDeviceToken(), request.getPlatform());
+                user, request.getDeviceId(), request.getPlatform());
         refreshToken.setUser(user);
         user.getRefreshTokens().add(refreshToken);
         userRepository.save(user);
@@ -353,45 +353,42 @@ public class NewUsersService {
                 .build();
     }
 
-    private void handleWrongOtpVerify(String phone, LocalDateTime now, String acceptLanguage) {
-        OtpRateLimit rate = otpRateLimitRepository.findByPhoneNumber(phone)
-                .orElseGet(() -> OtpRateLimit.builder().phoneNumber(phone).sendCount(0).verifyFailCount(0).build());
-        int fails = rate.getVerifyFailCount() == null ? 0 : rate.getVerifyFailCount();
-        fails++;
-        rate.setVerifyFailCount(fails);
-        if (fails >= maxVerifyAttempts) {
-            rate.setVerifyLockedUntil(now.plusMinutes(verifyLockMinutes));
-            rate.setVerifyFailCount(0);
-            otpRateLimitRepository.save(rate);
-            throwLocked(rate.getVerifyLockedUntil(), acceptLanguage, now);
+    private void recordWrongVerifyOrThrow(String phone) {
+        OtpVerifyAttemptService.Result result = otpVerifyAttemptService.recordWrongVerify(phone);
+        if (result.locked()) {
+            throw new AuthApiException("OTP_VERIFY_LOCKED",
+                    "You've reached the maximum number of attempts. Please try again when the restriction ends.",
+                    HttpStatus.TOO_MANY_REQUESTS, result.lockedUntil(), result.remainingSeconds());
         }
-        otpRateLimitRepository.save(rate);
-        throw new InvalidOtpCodeException(EnumMessagesLangValues.INVALID_OTP_CODE.getMessageByLang(acceptLanguage));
+        throw new AuthApiException("OTP_INCORRECT", "Incorrect verification code. Please try again.", HttpStatus.UNAUTHORIZED);
     }
 
     private void enforceSendLimits(String phone, String ip, LocalDateTime now, String acceptLanguage) {
         IpOtpRateLimit ipLimit = ipOtpRateLimitRepository.findByIpAddress(ip)
                 .orElseGet(() -> IpOtpRateLimit.builder().ipAddress(ip).sendCount(0).build());
         if (ipLimit.getLockedUntil() != null && ipLimit.getLockedUntil().isAfter(now)) {
-            throwLocked(ipLimit.getLockedUntil(), acceptLanguage, now);
+            // PO: IP lock — generic message, no countdown
+            throw new AuthApiException(null, "Too many attempts. Please try again later.", HttpStatus.TOO_MANY_REQUESTS);
         }
 
         OtpRateLimit phoneLimit = otpRateLimitRepository.findByPhoneNumber(phone)
                 .orElseGet(() -> OtpRateLimit.builder().phoneNumber(phone).sendCount(0).verifyFailCount(0).build());
 
         if (phoneLimit.getPhoneLockedUntil() != null && phoneLimit.getPhoneLockedUntil().isAfter(now)) {
-            throwLocked(phoneLimit.getPhoneLockedUntil(), acceptLanguage, now);
+            long rem = Math.max(1, java.time.Duration.between(now, phoneLimit.getPhoneLockedUntil()).getSeconds());
+            throw new AuthApiException("LOGIN_LOCKED",
+                    EnumMessagesLangValues.OTP_RATE_LIMITED.getMessageByLang(acceptLanguage),
+                    HttpStatus.TOO_MANY_REQUESTS, phoneLimit.getPhoneLockedUntil(), rem);
         }
         if (phoneLimit.getLastSentAt() != null
                 && phoneLimit.getLastSentAt().isAfter(now.minusSeconds(resendCooldownSeconds))) {
-            throw new PinLockedException(
+            LocalDateTime until = phoneLimit.getLastSentAt().plusSeconds(resendCooldownSeconds);
+            long rem = Math.max(1, java.time.Duration.between(now, until).getSeconds());
+            throw new AuthApiException("LOGIN_LOCKED",
                     EnumMessagesLangValues.OTP_RESEND_COOLDOWN.getMessageByLang(acceptLanguage),
-                    phoneLimit.getLastSentAt().plusSeconds(resendCooldownSeconds),
-                    Math.max(1, java.time.Duration.between(now, phoneLimit.getLastSentAt().plusSeconds(resendCooldownSeconds)).getSeconds())
-            );
+                    HttpStatus.TOO_MANY_REQUESTS, until, rem);
         }
 
-        // Persist stubs so recordSuccessfulSend can update.
         otpRateLimitRepository.save(phoneLimit);
         ipOtpRateLimitRepository.save(ipLimit);
 
@@ -401,17 +398,19 @@ public class NewUsersService {
                 && phoneLimit.getSendCount() >= maxSendsPerWindow) {
             phoneLimit.setPhoneLockedUntil(now.plusMinutes(phoneLockMinutes));
             otpRateLimitRepository.save(phoneLimit);
-            throwLocked(phoneLimit.getPhoneLockedUntil(), acceptLanguage, now);
+            long rem = Math.max(1, java.time.Duration.between(now, phoneLimit.getPhoneLockedUntil()).getSeconds());
+            throw new AuthApiException("LOGIN_LOCKED",
+                    EnumMessagesLangValues.OTP_RATE_LIMITED.getMessageByLang(acceptLanguage),
+                    HttpStatus.TOO_MANY_REQUESTS, phoneLimit.getPhoneLockedUntil(), rem);
         }
 
-        // IP abuse: same window thresholds → 24h lock
         if (ipLimit.getSendWindowStart() != null
                 && !ipLimit.getSendWindowStart().isBefore(now.minusMinutes(sendWindowMinutes))
                 && ipLimit.getSendCount() != null
                 && ipLimit.getSendCount() >= maxSendsPerWindow * 5) {
             ipLimit.setLockedUntil(now.plusHours(ipLockHours));
             ipOtpRateLimitRepository.save(ipLimit);
-            throwLocked(ipLimit.getLockedUntil(), acceptLanguage, now);
+            throw new AuthApiException(null, "Too many attempts. Please try again later.", HttpStatus.TOO_MANY_REQUESTS);
         }
     }
 
@@ -439,43 +438,24 @@ public class NewUsersService {
         ipOtpRateLimitRepository.save(ipLimit);
     }
 
-    private void clearOtpCounters(String phone) {
-        otpRateLimitRepository.findByPhoneNumber(phone).ifPresent(rate -> {
-            rate.setVerifyFailCount(0);
-            rate.setVerifyLockedUntil(null);
-            rate.setSendCount(0);
-            rate.setSendWindowStart(null);
-            rate.setPhoneLockedUntil(null);
-            otpRateLimitRepository.save(rate);
-        });
+    private String requireAuthToken(NewOtpRequest request) {
+        if (request == null || request.getAuthToken() == null || request.getAuthToken().isBlank()) {
+            throw new AuthApiException("INVALID_TOKEN", "Your session expired. Please start again.", HttpStatus.UNAUTHORIZED);
+        }
+        return request.getAuthToken().trim();
     }
 
-    private void throwLocked(LocalDateTime until, String acceptLanguage, LocalDateTime now) {
-        long remaining = Math.max(1, java.time.Duration.between(now, until).getSeconds());
-        throw new PinLockedException(
-                EnumMessagesLangValues.OTP_RATE_LIMITED.getMessageByLang(acceptLanguage),
-                until,
-                remaining
-        );
-    }
-
-    private String requireAuthToken(String authToken, String acceptLanguage) {
+    private String requireAuthTokenBody(String authToken) {
         if (authToken == null || authToken.isBlank()) {
-            throw new MissingFieldException(EnumMessagesLangValues.AUTH_TOKEN_MISSING.getMessageByLang(acceptLanguage));
+            throw new AuthApiException("INVALID_TOKEN", "Your session expired. Please start again.", HttpStatus.UNAUTHORIZED);
         }
         return authToken.trim();
     }
 
-    private void assertPhoneAuthValid(String authToken, String acceptLanguage) {
-        if (!jwtService.isPhoneAuthTokenValid(authToken)) {
-            throw new MissingFieldException(EnumMessagesLangValues.AUTH_TOKEN_INVALID.getMessageByLang(acceptLanguage));
-        }
-    }
-
-    private void assertNotConsumed(String authToken, String acceptLanguage) {
+    private void assertNotConsumed(String authToken) {
         String hash = HashUtil.sha256Hex(stripBearer(authToken));
         if (consumedAuthTokenRepository.existsById(hash)) {
-            throw new MissingFieldException(EnumMessagesLangValues.AUTH_TOKEN_INVALID.getMessageByLang(acceptLanguage));
+            throw new AuthApiException("INVALID_TOKEN", "Your session expired. Please start again.", HttpStatus.UNAUTHORIZED);
         }
     }
 
@@ -494,15 +474,31 @@ public class NewUsersService {
         return t.regionMatches(true, 0, "Bearer ", 0, 7) ? t.substring(7).trim() : t;
     }
 
-    private static String normalizePurpose(String purpose) {
-        if (purpose == null || purpose.isBlank()) {
+    private static String stripStage(String purposeRaw) {
+        if (purposeRaw == null) {
             return PURPOSE_REGISTER;
         }
-        return purpose.trim().toUpperCase();
+        int idx = purposeRaw.indexOf('|');
+        return idx >= 0 ? purposeRaw.substring(0, idx) : purposeRaw;
     }
 
     private static String generateOtpCode() {
         return String.valueOf(100000 + new Random().nextInt(900000));
+    }
+
+    /** Basic AZ mobile normalize: 070... → +99470... ; reject obviously bad. */
+    private static String normalizePhone(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String p = raw.trim().replace(" ", "").replace("-", "");
+        if (p.matches("0\\d{9}")) {
+            p = "+994" + p.substring(1);
+        }
+        if (!p.matches("\\+994\\d{9}")) {
+            return null;
+        }
+        return p;
     }
 
     private static String resolveClientIp(HttpServletRequest request) {

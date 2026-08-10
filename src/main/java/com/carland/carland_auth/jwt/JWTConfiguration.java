@@ -13,7 +13,6 @@ import org.springframework.security.config.annotation.web.configurers.AbstractHt
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
@@ -27,6 +26,7 @@ public class JWTConfiguration {
 
 
     private final UserDetailsService userDetailsService;
+    private final BCryptPasswordEncoder bCryptPasswordEncoder;
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
@@ -43,9 +43,9 @@ public class JWTConfiguration {
                                 "/api/v1/users/update/pin",
                                 "/api/v1/users/updatePassword",
                                 "/api/v1/newUsers/auth",
-                                "/api/v1/newUsers/loginNew",
-                                "/api/v1/newUsers/otp/createAndSendNew",
-                                "/api/v1/newUsers/otp/verifyNew",
+                                "/api/v1/newUsers/login",
+                                "/api/v1/newUsers/otp/createAndSend",
+                                "/api/v1/newUsers/otp/verify",
                                 "/api/v1/newUsers/setPinCode",
                                 "/invite-ui/get",
                                 "/api/v1/users/getNameSurname",
@@ -69,7 +69,7 @@ public class JWTConfiguration {
     @Bean
     public AuthenticationProvider authenticationProvider() {
         DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
-        provider.setPasswordEncoder(passwordEncoder());
+        provider.setPasswordEncoder(bCryptPasswordEncoder);
         provider.setUserDetailsService(userDetailsService);
         return provider;
     }
@@ -78,10 +78,5 @@ public class JWTConfiguration {
     public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
         return config.getAuthenticationManager();
 
-    }
-
-    @Bean
-    public PasswordEncoder passwordEncoder() {
-        return new BCryptPasswordEncoder(12);
     }
 }

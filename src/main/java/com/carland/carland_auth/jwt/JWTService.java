@@ -1,12 +1,14 @@
 package com.carland.carland_auth.jwt;
 
 import com.carland.carland_auth.entity.User;
+import com.carland.carland_auth.exceptions.AuthApiException;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.ExpiredJwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.SecretKey;
@@ -93,11 +95,49 @@ public class JWTService {
 
     public boolean isPhoneAuthTokenValid(String token) {
         try {
-            String type = extractClaim(stripBearer(token), claims -> claims.get("type", String.class), authenticationTokenSecretKey);
-            return "AUTH_FLOW".equals(type) && !isTokenExpired(stripBearer(token), authenticationTokenSecretKey);
-        } catch (Exception ex) {
+            assertPhoneAuthToken(token);
+            return true;
+        } catch (AuthApiException ex) {
             return false;
         }
+    }
+
+    /**
+     * Validates NewUsers authToken. Throws AUTH_TOKEN_EXPIRED or INVALID_TOKEN (401).
+     */
+    public void assertPhoneAuthToken(String token) {
+        if (token == null || token.isBlank()) {
+            throw new AuthApiException("INVALID_TOKEN", "Your session expired. Please start again.", HttpStatus.UNAUTHORIZED);
+        }
+        String raw = stripBearer(token);
+        try {
+            Claims claims = Jwts.parser()
+                    .verifyWith(getSignKey(authenticationTokenSecretKey))
+                    .build()
+                    .parseSignedClaims(raw)
+                    .getPayload();
+            if (!"AUTH_FLOW".equals(claims.get("type", String.class))) {
+                throw new AuthApiException("INVALID_TOKEN", "Your session expired. Please start again.", HttpStatus.UNAUTHORIZED);
+            }
+            if (claims.getExpiration() != null && claims.getExpiration().before(new Date())) {
+                throw new AuthApiException("AUTH_TOKEN_EXPIRED", "Your session expired. Please start again.", HttpStatus.UNAUTHORIZED);
+            }
+        } catch (AuthApiException ex) {
+            throw ex;
+        } catch (ExpiredJwtException ex) {
+            throw new AuthApiException("AUTH_TOKEN_EXPIRED", "Your session expired. Please start again.", HttpStatus.UNAUTHORIZED);
+        } catch (Exception ex) {
+            throw new AuthApiException("INVALID_TOKEN", "Your session expired. Please start again.", HttpStatus.UNAUTHORIZED);
+        }
+    }
+
+    /**
+     * Extracts purpose claim and logs it (PO/debug). Returns raw claim (may include |SET_PIN).
+     */
+    public String extractAndLogPurposeFromAuthToken(String token) {
+        String purpose = extractPurposeFromAuthToken(token);
+        log.info("purpose extracted from JWT: {}", purpose);
+        return purpose;
     }
 
     private String stripBearer(String token) {

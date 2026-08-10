@@ -26,13 +26,17 @@ public class User {
     String phoneNumber;
 
     /**
-     * BCrypt hash of the 4-digit PIN.
-     * Java field name is {@code pin}; DB column remains {@code password} for legacy compatibility.
-     * When the old API is fully deprecated, migrate with:
-     * {@code ALTER TABLE users RENAME COLUMN password TO pin;}
+     * Legacy BCrypt password hash (column password).
+     * Nullable for NewUsers-only accounts. Drop this column after full PIN migration.
      */
-    @Column(name = "password", nullable = false)
+    @Column(name = "password")
     String pin;
+
+    /**
+     * NewUsers Argon2id PIN hash. Null = no PIN set yet (legacy or unfinished signup).
+     */
+    @Column(name = "pin_hash")
+    String pinHash;
 
     @JsonIgnore
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
@@ -45,13 +49,10 @@ public class User {
     String name;
     String surname;
 
-    /** Consecutive wrong PIN attempts within the attempt window. */
     @Builder.Default
     Integer failedPinAttempts = 0;
 
-    /** End of temporary PIN lock (null = not locked). */
     LocalDateTime pinLockedUntil;
 
-    /** Timestamp of last failed PIN attempt (for attempt window). */
     LocalDateTime lastFailedPinAt;
 }

@@ -62,8 +62,7 @@ public class SMSServiceImpl implements SMSService {
             throw new ExpiredOtpException("OTP expired");
         }
 
-        String message = "CarCat otp kodunuz: " + otp.getCode();
-
+        String message = otpMessage(acceptLanguage, otp.getCode());
 
         String passMd5 = Md5Util.md5(password);
         String raw = passMd5 + login + message + number + sender;
@@ -81,11 +80,6 @@ public class SMSServiceImpl implements SMSService {
         );
 
         log.info("LSIM response: {}", response);
-
-        //   success check
-//        if (response == null || response.toLowerCase().contains("error")) {
-//            throw new RuntimeException("SMS gönderilmedi");
-//        }
     }
 
     @Override
@@ -97,14 +91,24 @@ public class SMSServiceImpl implements SMSService {
             throw new MissingFieldException("OTP boşdur");
         }
         String number = phoneNumber.startsWith("+") ? phoneNumber.substring(1) : phoneNumber;
-        String message = "CarCat otp kodunuz: " + otpCode;
+        String message = otpMessage(acceptLanguage, otpCode);
 
         String passMd5 = Md5Util.md5(password);
         String raw = passMd5 + login + message + number + sender;
         String key = Md5Util.md5(raw);
 
-        // Never log the OTP code in newUsers flow.
         String response = lsimFeign.sendSms(login, number, message, sender, key, true);
         log.info("LSIM response (newUsers): {}", response);
+    }
+
+    private static String otpMessage(String acceptLanguage, String code) {
+        String lang = acceptLanguage == null ? "az" : acceptLanguage.toLowerCase();
+        if (lang.startsWith("ru")) {
+            return "CarCat код подтверждения: " + code;
+        }
+        if (lang.startsWith("en")) {
+            return "Your CarCat verification code: " + code;
+        }
+        return "CarCat otp kodunuz: " + code;
     }
 }

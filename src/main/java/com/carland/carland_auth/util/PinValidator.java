@@ -1,13 +1,12 @@
 package com.carland.carland_auth.util;
 
-import com.carland.carland_auth.enums.EnumMessagesLangValues;
-import com.carland.carland_auth.exceptions.MissingFieldException;
-import com.carland.carland_auth.exceptions.WeakPinException;
+import com.carland.carland_auth.exceptions.AuthApiException;
+import org.springframework.http.HttpStatus;
 
 import java.util.Set;
 
 /**
- * Shared weak-PIN rules for legacy and newUsers flows.
+ * NewUsers PIN rules (PO).
  */
 public final class PinValidator {
 
@@ -19,17 +18,17 @@ public final class PinValidator {
     private PinValidator() {
     }
 
-    public static void validate(String pin, String acceptLanguage) {
+    public static void validateNewUsersPin(String pin) {
         if (pin == null || pin.isBlank()) {
-            throw new MissingFieldException(EnumMessagesLangValues.MISSING_USER_FIELDS.getMessageByLang(acceptLanguage));
+            throw new AuthApiException("PIN_LENGTH_ERROR", "PIN must be exactly 4 digits.", HttpStatus.BAD_REQUEST);
         }
         if (!pin.matches("\\d{4}")) {
-            throw new WeakPinException(EnumMessagesLangValues.WEAK_PIN.getMessageByLang(acceptLanguage));
+            throw new AuthApiException("PIN_LENGTH_ERROR", "PIN must be exactly 4 digits.", HttpStatus.BAD_REQUEST);
         }
         char first = pin.charAt(0);
         boolean allSame = pin.chars().allMatch(c -> c == first);
         if (allSame || SEQUENCES.contains(pin)) {
-            throw new WeakPinException(EnumMessagesLangValues.WEAK_PIN.getMessageByLang(acceptLanguage));
+            throw new AuthApiException("WEAK_PIN", "Please choose a less predictable PIN.", HttpStatus.BAD_REQUEST);
         }
     }
 }

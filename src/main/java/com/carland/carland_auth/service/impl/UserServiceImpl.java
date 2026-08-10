@@ -20,7 +20,6 @@ import com.carland.carland_auth.service.PinAttemptService;
 import com.carland.carland_auth.service.interfaces.OtpService;
 import com.carland.carland_auth.service.interfaces.RefreshTokenService;
 import com.carland.carland_auth.service.interfaces.UserService;
-import com.carland.carland_auth.util.PinValidator;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -154,7 +153,7 @@ public class UserServiceImpl implements UserService {
         String accessTokenJWT = jwtService.generateAccessToken(user, ACCESS_TOKEN_EXPIRATION);
 
         RefreshToken refreshToken = refreshTokenService.createRefreshToken(
-                user, request.getDeviceToken(), request.getPlatform());
+                user, request.getDeviceId(), request.getPlatform());
 
         List<RefreshToken> refreshTokenList = user.getRefreshTokens();
         refreshTokenList.add(refreshToken);
@@ -231,10 +230,12 @@ public class UserServiceImpl implements UserService {
         if (!user.getStatus().equals(UserStatus.OTP_VERIFIED.name())) {
             throw new InvalidStatusException(EnumMessagesLangValues.INVALID_USER_STATUS.getMessageByLang(acceptLanguage));
         }
+        // Legacy setPassword: free-form password (no 4-digit PIN rules). Stored in password column.
         String credential = userRequest.resolveCredential();
-        PinValidator.validate(credential, acceptLanguage);
-        String hashedPin = passwordEncoder.encode(credential);
-        user.setPin(hashedPin);
+        if (credential == null || credential.isBlank()) {
+            throw new MissingFieldException(EnumMessagesLangValues.MISSING_USER_FIELDS.getMessageByLang(acceptLanguage));
+        }
+        user.setPin(passwordEncoder.encode(credential));
         user.setStatus(UserStatus.ACTIVE.name());
 
         return UserResponse.builder()
@@ -288,7 +289,9 @@ public class UserServiceImpl implements UserService {
                 : UserRoles.ADMIN.name();
 
         String credential = inviteRequest.resolveCredential();
-        PinValidator.validate(credential, acceptLanguage);
+        if (credential == null || credential.isBlank()) {
+            throw new MissingFieldException(EnumMessagesLangValues.MISSING_USER_FIELDS.getMessageByLang(acceptLanguage));
+        }
 
         User newUser = User.builder()
                 .name(inviteRequest.getName())

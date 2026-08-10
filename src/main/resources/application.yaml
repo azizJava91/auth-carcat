@@ -57,6 +57,11 @@ otp:
     max-verify-attempts: 3
     verify-lock-minutes: 5
 
+auth:
+  rate-limit:
+    phone-per-minute: 10
+    ip-per-minute: 30
+
 pin:
   max-attempts: 3
   attempt-window-minutes: 10

@@ -187,6 +187,21 @@ private final ObjectMapper objectMapper;
         return new ResponseEntity<>(responseException, HttpStatus.TOO_MANY_REQUESTS);
     }
 
+    @ExceptionHandler(AuthApiException.class)
+    public ResponseEntity<ResponseException> handleAuthApiException(AuthApiException ex) {
+        ResponseException.ResponseExceptionBuilder builder = ResponseException.builder()
+                .error(ex.getError())
+                .message(ex.getMessage())
+                .timeStamp(LocalDateTime.now())
+                .status(ex.getStatus().value());
+        if (ex.getLockedUntil() != null) {
+            builder.lockedUntil(ex.getLockedUntil())
+                    .remainingSeconds(ex.getRemainingSeconds())
+                    .retryAfter(ex.getRemainingSeconds());
+        }
+        return new ResponseEntity<>(builder.build(), ex.getStatus());
+    }
+
     @ExceptionHandler(RefreshTokenNotSetException.class)
     public ResponseEntity<ResponseException> handleRefreshTokenNotSetException(RefreshTokenNotSetException ex) {
         ResponseException responseException=ResponseException.builder()
