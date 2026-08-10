@@ -15,6 +15,7 @@ import com.carland.carland_auth.new_users_version.dto.NewOtpRequest;
 import com.carland.carland_auth.new_users_version.dto.PinSetResponse;
 import com.carland.carland_auth.repository.*;
 import com.carland.carland_auth.service.AuthEndpointRateLimiter;
+import com.carland.carland_auth.service.OtpSendLockService;
 import com.carland.carland_auth.service.OtpVerifyAttemptService;
 import com.carland.carland_auth.service.PinAttemptService;
 import com.carland.carland_auth.service.interfaces.RefreshTokenService;
@@ -84,6 +85,7 @@ public class NewUsersService {
     private final Argon2PasswordEncoder argon2PasswordEncoder;
     private final PinAttemptService pinAttemptService;
     private final OtpVerifyAttemptService otpVerifyAttemptService;
+    private final OtpSendLockService otpSendLockService;
     private final AuthEndpointRateLimiter authEndpointRateLimiter;
 
     public AuthFlowResponse auth(UserRequest request, HttpServletRequest httpRequest, String acceptLanguage) {
@@ -402,24 +404,21 @@ public class NewUsersService {
                 && !phoneLimit.getSendWindowStart().isBefore(now.minusMinutes(sendWindowMinutes))
                 && phoneLimit.getSendCount() != null
                 && phoneLimit.getSendCount() >= maxSendsPerWindow) {
-            phoneLimit.setPhoneLockedUntil(now.plusMinutes(phoneLockMinutes));
-            otpRateLimitRepository.save(phoneLimit);
-            long rem = Math.max(1, java.time.Duration.between(now, phoneLimit.getPhoneLockedUntil()).getSeconds());
+            // REQUIRES_NEW so lock survives AuthApiException rollback on this method
+            OtpSendLockService.Result lock = otpSendLockService.lockPhone(phone, phoneLockMinutes);
             throw new AuthApiException("LOGIN_LOCKED",
                     EnumMessagesLangValues.OTP_RATE_LIMITED.getMessageByLang(acceptLanguage),
-                    HttpStatus.TOO_MANY_REQUESTS, phoneLimit.getPhoneLockedUntil(), rem);
+                    HttpStatus.TOO_MANY_REQUESTS, lock.lockedUntil(), lock.remainingSeconds());
         }
 
         if (ipLimit.getSendWindowStart() != null
                 && !ipLimit.getSendWindowStart().isBefore(now.minusMinutes(sendWindowMinutes))
                 && ipLimit.getSendCount() != null
                 && ipLimit.getSendCount() >= maxSendsPerWindow * 5) {
-            ipLimit.setLockedUntil(now.plusHours(ipLockHours));
-            ipOtpRateLimitRepository.save(ipLimit);
-            long rem = Math.max(1, java.time.Duration.between(now, ipLimit.getLockedUntil()).getSeconds());
+            OtpSendLockService.Result lock = otpSendLockService.lockIp(ip, ipLockHours);
             throw new AuthApiException("LOGIN_LOCKED",
                     "Too many attempts. Please try again later.",
-                    HttpStatus.TOO_MANY_REQUESTS, ipLimit.getLockedUntil(), rem);
+                    HttpStatus.TOO_MANY_REQUESTS, lock.lockedUntil(), lock.remainingSeconds());
         }
     }
 

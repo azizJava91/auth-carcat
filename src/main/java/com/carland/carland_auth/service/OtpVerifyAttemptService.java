@@ -30,6 +30,12 @@ public class OtpVerifyAttemptService {
         LocalDateTime now = LocalDateTime.now();
         OtpRateLimit rate = otpRateLimitRepository.findByPhoneNumber(phone)
                 .orElseGet(() -> OtpRateLimit.builder().phoneNumber(phone).sendCount(0).verifyFailCount(0).build());
+
+        if (rate.getVerifyLockedUntil() != null && rate.getVerifyLockedUntil().isAfter(now)) {
+            long rem = Math.max(1, java.time.Duration.between(now, rate.getVerifyLockedUntil()).getSeconds());
+            return new Result(true, rate.getVerifyLockedUntil(), rem);
+        }
+
         int fails = (rate.getVerifyFailCount() == null ? 0 : rate.getVerifyFailCount()) + 1;
         rate.setVerifyFailCount(fails);
         if (fails >= maxVerifyAttempts) {

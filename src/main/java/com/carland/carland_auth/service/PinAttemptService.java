@@ -37,6 +37,11 @@ public class PinAttemptService {
         User user = userRepository.findById(userId).orElseThrow();
         LocalDateTime now = LocalDateTime.now();
 
+        if (user.getPinLockedUntil() != null && user.getPinLockedUntil().isAfter(now)) {
+            long remaining = Math.max(1, java.time.Duration.between(now, user.getPinLockedUntil()).getSeconds());
+            return new Result(true, user.getPinLockedUntil(), remaining);
+        }
+
         int attempts;
         if (user.getLastFailedPinAt() == null
                 || user.getLastFailedPinAt().isBefore(now.minusMinutes(pinAttemptWindowMinutes))) {
