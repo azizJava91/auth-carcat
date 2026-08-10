@@ -19,7 +19,8 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
 
     List<RefreshToken> findAllByUserIdAndRevokedAtIsNull(Long userId);
 
-    @Modifying(clearAutomatically = true)
+    // flushAutomatically: pending User.pinHash/status must hit DB before clearAutomatically drops the session
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("update RefreshToken r set r.revokedAt = :now where r.user.id = :userId and r.revokedAt is null "
             + "and (:keepDeviceId is null or r.deviceId is null or r.deviceId <> :keepDeviceId)")
     int revokeAllExceptDevice(@Param("userId") Long userId,

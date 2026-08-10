@@ -276,7 +276,8 @@ public class NewUsersService {
         user.setFailedPinAttempts(0);
         user.setLastFailedPinAt(null);
         user.setPinLockedUntil(null);
-        userRepository.save(user);
+        // Must flush before revoke: @Modifying clearAutomatically would otherwise drop unflushed pin_hash
+        userRepository.saveAndFlush(user);
 
         if (PURPOSE_RESET.equals(purpose) || hadPin) {
             refreshTokenRepository.revokeAllExceptDevice(user.getId(), request.getDeviceId(), LocalDateTime.now());
