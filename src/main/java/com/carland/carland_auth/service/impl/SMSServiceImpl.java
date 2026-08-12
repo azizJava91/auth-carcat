@@ -7,6 +7,7 @@ import com.carland.carland_auth.exceptions.*;
 import com.carland.carland_auth.feign.LsimFeign;
 import com.carland.carland_auth.repository.OtpRepository;
 import com.carland.carland_auth.repository.UserRepository;
+import com.carland.carland_auth.service.SmsBalanceAlertService;
 import com.carland.carland_auth.service.interfaces.SMSService;
 import com.carland.carland_auth.util.Md5Util;
 import lombok.RequiredArgsConstructor;
@@ -25,6 +26,7 @@ public class SMSServiceImpl implements SMSService {
     private final UserRepository userRepository;
     private final OtpRepository otpRepository;
     private final LsimFeign lsimFeign;
+    private final SmsBalanceAlertService smsBalanceAlertService;
 
     @Value("${lsim.api.login}")
     private String login;
@@ -80,6 +82,7 @@ public class SMSServiceImpl implements SMSService {
         );
 
         log.info("LSIM response: {}", response);
+        smsBalanceAlertService.checkAndAlertAfterOtpSend();
     }
 
     @Override
@@ -99,6 +102,7 @@ public class SMSServiceImpl implements SMSService {
 
         String response = lsimFeign.sendSms(login, number, message, sender, key, true);
         log.info("LSIM response (newUsers): {}", response);
+        smsBalanceAlertService.checkAndAlertAfterOtpSend();
     }
 
     private static String otpMessage(String acceptLanguage, String code) {

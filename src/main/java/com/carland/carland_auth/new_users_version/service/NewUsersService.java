@@ -88,6 +88,7 @@ public class NewUsersService {
     private final OtpSendLockService otpSendLockService;
     private final AuthEndpointRateLimiter authEndpointRateLimiter;
 
+    @Transactional
     public AuthFlowResponse auth(UserRequest request, HttpServletRequest httpRequest, String acceptLanguage) {
         if (request == null) {
             throw new HttpMessageConversionException(EnumMessagesLangValues.MISSING_BODY.getMessageByLang(acceptLanguage));
@@ -104,11 +105,12 @@ public class NewUsersService {
         boolean hasPin = user != null && user.getPinHash() != null && !user.getPinHash().isBlank();
         boolean deleted = user != null && UserStatus.DELETED.name().equalsIgnoreCase(user.getStatus());
         boolean active = user != null && UserStatus.ACTIVE.name().equalsIgnoreCase(user.getStatus());
-        // PIN_CHECK only for ACTIVE + pin_hash. OTP_VERIFIED (left before setPin) → SEND_OTP.
+        // PIN_CHECK only for ACTIVE + pin_hash. OTP_VERIFIED / restart → SEND_OTP.
         boolean pinCheckEligible = hasPin && active && !deleted;
 
-        // RESET: if no account / no usable PIN → treat as REGISTER (PO CRCT-182). No 404.
+        // RESET with usable PIN → OTP reset path (next unchanged)
         if (PURPOSE_RESET.equals(requestedPurpose) && pinCheckEligible) {
+            syncUserStatusForNext(user, phone, NEXT_SEND_OTP);
             String token = jwtService.generatePhoneAuthToken(phone, PURPOSE_RESET, authTokenExpiration);
             return AuthFlowResponse.builder()
                     .authToken(token)
@@ -119,6 +121,7 @@ public class NewUsersService {
         }
 
         if (pinCheckEligible) {
+            // ACTIVE + PIN — leave status ACTIVE; next unchanged
             String token = jwtService.generatePhoneAuthToken(phone, PURPOSE_REGISTER, authTokenExpiration);
             return AuthFlowResponse.builder()
                     .authToken(token)
@@ -128,6 +131,8 @@ public class NewUsersService {
                     .build();
         }
 
+        // SEND_OTP path: create user if missing; status → OTP_PENDING (incl. DELETED / restart)
+        syncUserStatusForNext(user, phone, NEXT_SEND_OTP);
         String token = jwtService.generatePhoneAuthToken(phone, PURPOSE_REGISTER, authTokenExpiration);
         return AuthFlowResponse.builder()
                 .authToken(token)
@@ -135,6 +140,29 @@ public class NewUsersService {
                 .purpose(PURPOSE_REGISTER)
                 .message(EnumMessagesLangValues.REGISTER_SUCCESS.getMessageByLang(acceptLanguage))
                 .build();
+    }
+
+    /**
+     * Align users.status with the step {@code next} forces — does not change API next/response contract.
+     * Legacy-compatible ladder: OTP_PENDING → OTP_VERIFIED → ACTIVE (no CREATED in enum).
+     */
+    private void syncUserStatusForNext(User user, String phone, String next) {
+        if (NEXT_PIN_CHECK.equals(next)) {
+            return;
+        }
+        if (NEXT_SEND_OTP.equals(next)) {
+            if (user == null) {
+                userRepository.save(User.builder()
+                        .phoneNumber(phone)
+                        .createdAt(LocalDateTime.now())
+                        .role(UserRoles.USER.name())
+                        .status(UserStatus.OTP_PENDING.name())
+                        .build());
+                return;
+            }
+            user.setStatus(UserStatus.OTP_PENDING.name());
+            userRepository.save(user);
+        }
     }
 
     @Transactional
@@ -155,6 +183,11 @@ public class NewUsersService {
         pending.forEach(o -> o.setStatus(OtpStatus.FAIL.name()));
         otpRepository.saveAll(pending);
 
+        User existingUser = userRepository.findByPhoneNumber(phone);
+        Long userId = (existingUser != null
+                && !UserStatus.DELETED.name().equalsIgnoreCase(existingUser.getStatus()))
+                ? existingUser.getId() : null;
+
         String code = generateOtpCode();
         otpRepository.save(Otp.builder()
                 .code(HashUtil.sha256Hex(code))
@@ -162,6 +195,7 @@ public class NewUsersService {
                 .status(OtpStatus.PENDING.name())
                 .createdAt(now)
                 .phoneNumber(phone)
+                .userId(userId)
                 .build());
 
         smsService.sendOtpToPhone(phone, code, acceptLanguage);
@@ -235,10 +269,25 @@ public class NewUsersService {
             userRepository.save(user);
         }
 
-        List<Otp> pending = otpRepository.findAllByPhoneNumberAndStatus(phone, OtpStatus.PENDING.name());
-        pending.forEach(o -> o.setStatus(o.getId().equals(otpLast.getId())
-                ? OtpStatus.SUCCESS.name() : OtpStatus.FAIL.name()));
-        otpRepository.saveAll(pending);
+        if (user != null && !UserStatus.DELETED.name().equalsIgnoreCase(user.getStatus())) {
+            Long userId = user.getId();
+            List<Otp> phoneOtps = otpRepository.findAllByPhoneNumber(phone);
+            for (Otp o : phoneOtps) {
+                if (o.getUserId() == null) {
+                    o.setUserId(userId);
+                }
+                if (OtpStatus.PENDING.name().equals(o.getStatus())) {
+                    o.setStatus(o.getId().equals(otpLast.getId())
+                            ? OtpStatus.SUCCESS.name() : OtpStatus.FAIL.name());
+                }
+            }
+            otpRepository.saveAll(phoneOtps);
+        } else {
+            List<Otp> pending = otpRepository.findAllByPhoneNumberAndStatus(phone, OtpStatus.PENDING.name());
+            pending.forEach(o -> o.setStatus(o.getId().equals(otpLast.getId())
+                    ? OtpStatus.SUCCESS.name() : OtpStatus.FAIL.name()));
+            otpRepository.saveAll(pending);
+        }
 
         otpVerifyAttemptService.clearVerifyCounters(phone);
 

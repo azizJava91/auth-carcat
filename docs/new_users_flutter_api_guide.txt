@@ -1,0 +1,471 @@
+================================================================================
+carland_auth — NewUsers API guide for Flutter
+Base: https://digital-innovation.agency/auth/server
+Path prefix: /api/v1/newUsers
+Document version: 2026-08-10 (post pinSetupToken + lock countdown fixes)
+================================================================================
+
+This file is the full client contract for the NEW app auth flow.
+Do NOT mix these endpoints with legacy /api/v1/users or /api/v1/otp
+except for token refresh (see section 7).
+
+If something is not in this file, ask backend — but everything Flutter needs
+for NewUsers register / login / forgot-PIN is below.
+
+
+--------------------------------------------------------------------------------
+0) GLOBAL RULES
+--------------------------------------------------------------------------------
+
+Headers (almost every call):
+  Content-Type: application/json
+  Accept-Language: az | en | ru
+    - Controls SMS text language and some error messages
+    - If omitted, server defaults to "az"
+
+Auth style:
+  - NewUsers flow tokens go in JSON BODY (not Authorization Bearer),
+    except refresh (Bearer refreshToken) and after-login API calls (Bearer accessToken).
+  - Field names are case-sensitive as shown.
+
+Phone format:
+  - Prefer E.164 Azerbaijan: +994XXXXXXXXX (9 digits after +994)
+  - Server normalizes common variants; invalid phone → 400 INVALID_PHONE
+
+Never log:
+  - OTP codes
+  - PIN codes
+  - full JWTs in production logs (optional truncated debug only)
+
+Drive screens from response field "next":
+  SEND_OTP     → show OTP / phone→OTP flow, then call createAndSend
+  PIN_CHECK    → show PIN login, then call login
+  VERIFY_OTP   → stay on OTP entry, user must enter SMS code, then verify
+  SET_PIN      → show set-PIN screen, then setPinCode
+
+Token names (do not confuse):
+  authToken      → from /auth and createAndSend; used for OTP steps
+  pinSetupToken  → ONLY from /otp/verify; used ONLY in setPinCode
+  accessToken    → from /login (and refresh); for carland_service APIs
+  refreshToken   → from /login (and refresh); for /users/refresh
+
+purpose:
+  - Optional on /auth body only: "RESET" for forgot-PIN
+  - Server embeds purpose inside JWT
+  - Do NOT send purpose as query param on setPinCode
+  - Client can read purpose from /auth and verify responses for UI copy
+
+
+--------------------------------------------------------------------------------
+1) ENDPOINT LIST (final names — no *New suffix)
+--------------------------------------------------------------------------------
+
+POST   /api/v1/newUsers/auth
+POST   /api/v1/newUsers/otp/createAndSend
+POST   /api/v1/newUsers/otp/verify
+PUT    /api/v1/newUsers/setPinCode
+POST   /api/v1/newUsers/login
+
+Refresh (legacy path, still used after NewUsers login):
+POST   /api/v1/users/refresh
+
+
+--------------------------------------------------------------------------------
+2) HAPPY PATHS (what Flutter should implement)
+--------------------------------------------------------------------------------
+
+A) First-time register (no account / no usable PIN)
+   1. POST /auth                    → next=SEND_OTP, authToken, purpose=REGISTER
+   2. POST /otp/createAndSend       → next=VERIFY_OTP, authToken
+   3. User enters SMS code
+   4. POST /otp/verify              → next=SET_PIN, pinSetupToken, purpose=REGISTER
+   5. PUT  /setPinCode              → { "status": "PIN_SET" }   // NO tokens here
+   6. POST /login                   → accessToken + refreshToken
+   7. Store tokens; use accessToken for service APIs; refresh via /users/refresh
+
+B) Returning user (ACTIVE + pin_hash set)
+   1. POST /auth                    → next=PIN_CHECK, authToken
+   2. POST /login                   → accessToken + refreshToken
+   (You may ignore authToken on this path if you go straight to login.)
+
+C) Forgot PIN
+   1. POST /auth { purpose:"RESET" } → next=SEND_OTP, purpose=RESET
+   2. createAndSend → verify → setPinCode → login
+   Notes:
+   - If phone has no usable PIN / no account, server treats RESET like REGISTER
+     (no 404). next will still be SEND_OTP.
+   - Successful RESET setPinCode revokes other devices' refresh sessions.
+
+D) Abandoned signup (OTP verified earlier, left before setPin)
+   - User status OTP_VERIFIED, no pin_hash (or not ACTIVE)
+   - POST /auth → next=SEND_OTP (NOT PIN_CHECK)
+   - Continue from createAndSend again
+
+
+--------------------------------------------------------------------------------
+3) STEP-BY-STEP: REQUEST / RESPONSE
+--------------------------------------------------------------------------------
+
+========== 3.1 POST /api/v1/newUsers/auth ==========
+
+Purpose:
+  Decide next screen. Does NOT create user. Does NOT send SMS.
+
+Headers:
+  Content-Type: application/json
+  Accept-Language: az|en|ru   (recommended)
+
+Body:
+{
+  "phoneNumber": "+994501234567",
+  "purpose": "RESET"              // OPTIONAL — omit for normal entry
+}
+
+Success HTTP 200:
+{
+  "authToken": "<jwt, ~6 minutes>",
+  "next": "SEND_OTP",             // or "PIN_CHECK"
+  "purpose": "REGISTER",          // or "RESET"
+  "message": "..."
+}
+
+How next is chosen:
+  - PIN_CHECK  → user exists, status ACTIVE, pin_hash present
+  - SEND_OTP   → everyone else (new phone, OTP_VERIFIED without PIN, RESET flow, etc.)
+
+Errors (examples):
+  400 INVALID_PHONE
+  429 LOGIN_LOCKED   → rate limit; see section 5 (countdown fields present)
+
+Rate limit:
+  ~10 requests / minute / phone
+  ~30 requests / minute / IP
+
+
+========== 3.2 POST /api/v1/newUsers/otp/createAndSend ==========
+
+Purpose:
+  Send SMS OTP. OTP code is NEVER in the JSON response.
+
+Headers:
+  Content-Type: application/json
+  Accept-Language: az|en|ru   (changes SMS language)
+
+Body:
+{
+  "authToken": "<from /auth>"
+}
+
+Success HTTP 200:
+{
+  "authToken": "<jwt>",
+  "next": "VERIFY_OTP",
+  "purpose": "REGISTER",          // or RESET
+  "message": "..."
+}
+
+Client action:
+  Stay / go to OTP input screen. Keep authToken for verify.
+
+Limits:
+  - Resend cooldown: 30 seconds → 429 LOGIN_LOCKED + countdown
+  - Max 3 successful sends / 15 minutes / phone → phone lock ~5 minutes
+  - IP abuse → IP lock 24 hours
+  - OTP lifetime: 3 minutes (then OTP_EXPIRED on verify)
+
+Errors:
+  401 AUTH_TOKEN_EXPIRED   → restart from phone (/auth)
+  401 INVALID_TOKEN        → restart from phone
+  429 LOGIN_LOCKED         → show countdown (cooldown / phone / IP)
+
+
+========== 3.3 POST /api/v1/newUsers/otp/verify ==========
+
+Purpose:
+  Check OTP. May CREATE the user if missing (status OTP_VERIFIED).
+  Returns pinSetupToken for the next step.
+
+Headers:
+  Content-Type: application/json
+  Accept-Language: az|en|ru
+
+Body:
+{
+  "authToken": "<from /auth or createAndSend>",
+  "otp": "123456"
+}
+  // alias accepted: "otpCode"
+
+Success HTTP 200:
+{
+  "pinSetupToken": "<NEW jwt for setPinCode only>",
+  "next": "SET_PIN",
+  "purpose": "REGISTER",          // or RESET
+  "message": "..."
+}
+
+CRITICAL for Flutter:
+  - Response field is pinSetupToken (NOT authToken).
+  - authToken is omitted / null — do not look for authToken here.
+  - Discard old authToken for set-PIN; use pinSetupToken in setPinCode body.
+
+Errors:
+  401 OTP_INCORRECT        → stay on OTP; allow retry until lock
+  400 OTP_EXPIRED          → stay on OTP; call createAndSend again
+  429 OTP_VERIFY_LOCKED    → 3 wrong attempts; countdown ~5 minutes
+  401 AUTH_TOKEN_EXPIRED / INVALID_TOKEN → back to /auth
+
+
+========== 3.4 PUT /api/v1/newUsers/setPinCode ==========
+
+Purpose:
+  Store PIN (Argon2id in pin_hash). Activate user.
+  Does NOT return access/refresh tokens.
+
+Headers:
+  Content-Type: application/json
+  Accept-Language: az|en|ru
+
+Body:
+{
+  "pinSetupToken": "<from /otp/verify>",
+  "pinCode": "2580"
+}
+
+PIN rules:
+  - Exactly 4 digits
+  - Reject all-same (1111) and simple sequences (1234, 4321, …)
+  - Wrong → 400 WEAK_PIN or PIN_LENGTH_ERROR
+
+Success HTTP 200:
+{
+  "status": "PIN_SET"
+}
+
+CRITICAL:
+  - No accessToken / refreshToken in this response
+  - Immediately call POST /login with phone + pin + deviceId
+  - pinSetupToken is single-use; reuse → INVALID_TOKEN
+
+Errors:
+  400 WEAK_PIN
+  400 PIN_LENGTH_ERROR
+  401 INVALID_TOKEN          // expired / wrong stage / already consumed
+
+
+========== 3.5 POST /api/v1/newUsers/login ==========
+
+Purpose:
+  Exchange phone + PIN for session tokens.
+
+Headers:
+  Content-Type: application/json
+  Accept-Language: az|en|ru
+
+Body:
+{
+  "phoneNumber": "+994501234567",
+  "pinCode": "2580",
+  "deviceId": "<stable device id OR FCM token string>",
+  "platform": "ANDROID"           // optional but recommended: ANDROID | IOS
+}
+
+Field aliases accepted by server:
+  pinCode  ← also password / pin
+  deviceId ← also deviceToken
+
+deviceId is REQUIRED. Missing → 400 with error INVALID_TOKEN message "deviceId is required."
+
+Success HTTP 200:
+{
+  "accessToken": "<~15 minutes>",
+  "refreshToken": "<~1 year>",
+  "role": "USER",
+  "userId": 123,
+  "phoneNumber": "+994501234567",
+  "name": null,
+  "surname": null,
+  "message": "..."
+}
+
+Client action:
+  Persist accessToken + refreshToken securely.
+  Use Authorization: Bearer <accessToken> on carland_service APIs.
+
+Errors:
+  401 PIN_INCORRECT
+  401 PIN_NOT_SET            // no pin_hash / not ACTIVE
+  429 LOGIN_LOCKED           // 3 wrong PINs in window (~5 min lock); countdown
+  400 INVALID_TOKEN          // missing deviceId (as above)
+
+
+--------------------------------------------------------------------------------
+4) TOKEN LIFETIMES (approx)
+--------------------------------------------------------------------------------
+
+authToken / pinSetupToken (auth flow JWT):  ~6 minutes (360s)
+accessToken:                                ~15 minutes (900s)
+refreshToken:                               ~1 year
+OTP code:                                   ~3 minutes
+
+
+--------------------------------------------------------------------------------
+5) ERROR ENVELOPE + LOCK COUNTDOWN (all NewUsers errors)
+--------------------------------------------------------------------------------
+
+Shape:
+{
+  "error": "LOGIN_LOCKED",
+  "message": "localized human text",
+  "timeStamp": "2026-08-10T12:00:00",
+  "status": 429,
+  "lockedUntil": "2026-08-10T12:05:00",
+  "remainingSeconds": 240,
+  "retryAfter": 240
+}
+
+Rules for Flutter:
+  - Always read "error" for branching (machine code).
+  - On 429 locks, use remainingSeconds OR lockedUntil for countdown UI.
+  - retryAfter == remainingSeconds (same value, alias).
+  - If user retries while still locked, server returns TIME LEFT
+    (e.g. 240), NOT a fresh full duration (e.g. not always 300).
+    Update your countdown from the latest response.
+  - lockedUntil / remainingSeconds / retryAfter are null on non-lock errors.
+
+Named errors you must handle:
+
+  AUTH_TOKEN_EXPIRED     401   → restart at phone screen (/auth)
+  INVALID_TOKEN          401/400 → session invalid or missing deviceId
+  INVALID_PHONE          400
+  OTP_INCORRECT          401   → stay on OTP
+  OTP_EXPIRED            400   → resend via createAndSend
+  OTP_VERIFY_LOCKED      429   → countdown; disable submit until unlock
+  WEAK_PIN               400   → set-PIN screen validation
+  PIN_LENGTH_ERROR       400
+  PIN_INCORRECT          401   → PIN login screen
+  PIN_NOT_SET            401   → send user through OTP/setPin flow
+  LOGIN_LOCKED           429   → countdown (login lock OR createAndSend limits
+                                  OR /auth rate limit)
+
+APIs that can return lock countdown:
+  POST /auth
+  POST /otp/createAndSend
+  POST /otp/verify          (OTP_VERIFY_LOCKED)
+  POST /login               (LOGIN_LOCKED)
+
+
+--------------------------------------------------------------------------------
+6) createAndSend LIMIT NUMBERS (for UX copy / QA)
+--------------------------------------------------------------------------------
+
+  Resend cooldown:     30 seconds
+  Max SMS / window:     3 sends / 15 minutes / phone
+  Phone lock after that: ~5 minutes
+  IP lock (abuse):     24 hours
+  OTP verify fails:    3 wrong → ~5 minute OTP_VERIFY_LOCKED
+  PIN login fails:     3 wrong in ~10 min window → ~5 minute LOGIN_LOCKED
+
+
+--------------------------------------------------------------------------------
+7) REFRESH (after successful login)
+--------------------------------------------------------------------------------
+
+POST /api/v1/users/refresh
+Headers:
+  Authorization: Bearer <refreshToken>
+  Accept-Language: az|en|ru
+
+No body required.
+
+Success: UserResponse with new accessToken + refreshToken (same shape as login).
+On failure (401): clear session → send user to /auth or login screen.
+
+
+--------------------------------------------------------------------------------
+8) SCREEN MAP (recommended)
+--------------------------------------------------------------------------------
+
+PhoneScreen
+  → call /auth
+  → if next=PIN_CHECK → PinLoginScreen
+  → if next=SEND_OTP  → OtpScreen (then createAndSend)
+
+OtpScreen
+  → createAndSend on enter / resend (respect 30s cooldown + 429 countdown)
+  → verify with otp
+  → on success → SetPinScreen with pinSetupToken
+  → on OTP_EXPIRED → resend
+  → on OTP_VERIFY_LOCKED → countdown overlay
+
+SetPinScreen
+  → setPinCode(pinSetupToken, pinCode)
+  → on PIN_SET → PinLoginScreen OR auto-call /login then Home
+
+PinLoginScreen
+  → login(phone, pinCode, deviceId, platform)
+  → on success → Home
+  → on LOGIN_LOCKED → countdown
+  → on PIN_NOT_SET → treat as SEND_OTP flow
+
+ForgotPin
+  → /auth with purpose=RESET → same OTP → setPin → login path
+
+
+--------------------------------------------------------------------------------
+9) MINIMAL PSEUDO-SEQUENCE (register)
+--------------------------------------------------------------------------------
+
+auth = POST /auth { phoneNumber }
+assert auth.next == SEND_OTP
+token = auth.authToken
+
+send = POST /otp/createAndSend { authToken: token }
+assert send.next == VERIFY_OTP
+
+ver = POST /otp/verify { authToken: token, otp: userCode }
+assert ver.next == SET_PIN
+pinToken = ver.pinSetupToken
+
+set = PUT /setPinCode { pinSetupToken: pinToken, pinCode: "2580" }
+assert set.status == "PIN_SET"
+
+sess = POST /login {
+  phoneNumber, pinCode: "2580", deviceId: "...", platform: "ANDROID"
+}
+save(sess.accessToken, sess.refreshToken)
+
+
+--------------------------------------------------------------------------------
+10) DO NOT
+--------------------------------------------------------------------------------
+
+- Do not call legacy /users/register or /otp/* for the new app flow
+- Do not send purpose query on setPinCode
+- Do not expect tokens from setPinCode
+- Do not use authToken in setPinCode body (use pinSetupToken)
+- Do not expect pinSetupToken from /auth or createAndSend
+- Do not treat OTP_VERIFIED abandoned users as PIN_CHECK
+- Do not hardcode countdown to 300s after every 429 — use server remainingSeconds
+
+
+--------------------------------------------------------------------------------
+11) QUICK FIELD CHEATSHEET
+--------------------------------------------------------------------------------
+
+Step              Method/Path                         Body keys
+---------------   ---------------------------------   ----------------------------------
+1 Decide next     POST /newUsers/auth                 phoneNumber, purpose?
+2 Send SMS        POST /newUsers/otp/createAndSend    authToken
+3 Check OTP       POST /newUsers/otp/verify           authToken, otp
+4 Save PIN        PUT  /newUsers/setPinCode           pinSetupToken, pinCode
+5 Session         POST /newUsers/login                phoneNumber, pinCode, deviceId, platform?
+6 Refresh         POST /users/refresh                 (Bearer refreshToken)
+
+next values: SEND_OTP | PIN_CHECK | VERIFY_OTP | SET_PIN
+setPin success: { "status": "PIN_SET" }
+
+
+================================================================================
+End of Flutter NewUsers contract. Source of truth: carland_auth NewUsersController.
+================================================================================

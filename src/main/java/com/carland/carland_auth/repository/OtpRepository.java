@@ -16,4 +16,6 @@ public interface OtpRepository extends JpaRepository<Otp, Long> {
     Otp findTopByPhoneNumberAndStatusOrderByCreatedAtDesc(String phoneNumber, String status);
 
     List<Otp> findAllByPhoneNumberAndStatus(String phoneNumber, String status);
+
+    List<Otp> findAllByPhoneNumber(String phoneNumber);
 }

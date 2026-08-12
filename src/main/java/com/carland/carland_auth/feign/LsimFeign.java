@@ -14,4 +14,8 @@ public interface LsimFeign {
                    @RequestParam("sender") String sender,
                    @RequestParam("key") String key,
                    @RequestParam(value = "unicode", required = false) boolean unicode);
+
+    @GetMapping("/quicksms/v1/balance")
+    String getBalance(@RequestParam("login") String login,
+                      @RequestParam("key") String key);
 }

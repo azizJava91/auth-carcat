@@ -45,6 +45,9 @@ lsim:
     login: user4car
     password: VcC9sC%7T20!2e
     sender: CarCat
+  balance-alert:
+    thresholds: 1500,1270,1000,500
+    phones: +994502021123,+994705757570,+994558774777,+994772196561,+994709957000
 
 otp:
   expiration-minutes: 3

@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>carland_auth — Flutter API contract (NewUsers)</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --card: #fff;
+      --text: #1a1a1a;
+      --muted: #5c6570;
+      --line: #e2e6ea;
+      --accent: #0b6e4f;
+      --code-bg: #0f172a;
+      --code-fg: #e2e8f0;
+      --warn: #9a3412;
+      --ok: #166534;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+    }
+    header {
+      background: linear-gradient(135deg, #0b6e4f, #0f766e);
+      color: #fff;
+      padding: 28px 20px 32px;
+    }
+    header h1 { margin: 0 0 8px; font-size: 1.55rem; }
+    header p { margin: 0; opacity: .92; max-width: 820px; }
+    main { max-width: 920px; margin: 0 auto; padding: 20px 16px 48px; }
+    nav {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin-bottom: 18px;
+    }
+    nav a { color: var(--accent); text-decoration: none; margin-right: 12px; font-size: .92rem; }
+    nav a:hover { text-decoration: underline; }
+    section {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 18px 18px 14px;
+      margin-bottom: 16px;
+    }
+    h2 { margin: 0 0 10px; font-size: 1.2rem; color: #0f172a; }
+    h3 { margin: 16px 0 8px; font-size: 1.02rem; }
+    p, li { color: var(--text); font-size: .95rem; }
+    .muted { color: var(--muted); font-size: .9rem; }
+    table { width: 100%; border-collapse: collapse; font-size: .9rem; margin: 8px 0 12px; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #f1f5f9; }
+    code, .mono { font-family: ui-monospace, Consolas, monospace; font-size: .86rem; }
+    pre {
+      background: var(--code-bg);
+      color: var(--code-fg);
+      padding: 12px 14px;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: .82rem;
+      line-height: 1.4;
+    }
+    .tag {
+      display: inline-block;
+      font-size: .72rem;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 999px;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .tag-post { background: #dbeafe; color: #1e40af; }
+    .tag-put { background: #fef3c7; color: #92400e; }
+    .path { font-family: ui-monospace, Consolas, monospace; font-weight: 600; }
+    .ok { color: var(--ok); font-weight: 600; }
+    .warn { color: var(--warn); font-weight: 600; }
+    .box {
+      border-left: 3px solid var(--accent);
+      background: #f0fdf4;
+      padding: 10px 12px;
+      margin: 10px 0;
+      border-radius: 0 8px 8px 0;
+      font-size: .9rem;
+    }
+    .box-warn {
+      border-left-color: #ea580c;
+      background: #fff7ed;
+    }
+    footer { text-align: center; color: var(--muted); font-size: .8rem; padding: 8px 16px 24px; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>carland_auth — Flutter API contract</h1>
+  <p>
+    NewUsers flow for the new app. Base URL:
+    <span class="mono">https://digital-innovation.agency/auth/server</span>
+    · Header on almost all calls: <span class="mono">Accept-Language: az | en | ru</span>
+  </p>
+</header>
+
+<main>
+  <nav>
+    <a href="#overview">Overview</a>
+    <a href="#flow">Flow</a>
+    <a href="#auth">auth</a>
+    <a href="#create">createAndSend</a>
+    <a href="#verify">verify</a>
+    <a href="#setpin">setPinCode</a>
+    <a href="#login">login</a>
+    <a href="#refresh">refresh</a>
+    <a href="#errors">Errors / locks</a>
+    <a href="#checklist">Checklist</a>
+  </nav>
+
+  <section id="overview">
+    <h2>1. Overview</h2>
+    <ul>
+      <li><strong>NewUsers base:</strong> <span class="mono">/api/v1/newUsers</span></li>
+      <li><strong>Legacy</strong> (old app only): <span class="mono">/api/v1/users</span> + <span class="mono">/api/v1/otp</span> — do not mix with NewUsers.</li>
+      <li><strong>authToken</strong> — used in <span class="mono">/auth</span> and OTP steps (JSON body, not Bearer). TTL ~6 minutes.</li>
+      <li><strong>pinSetupToken</strong> — returned only by <span class="mono">/otp/verify</span>; used only in <span class="mono">setPinCode</span>.</li>
+      <li><strong>purpose</strong> — lives in JWT claims. Client may send <span class="mono">purpose: "RESET"</span> only on <span class="mono">/auth</span>. Do not send purpose query on setPinCode.</li>
+      <li><strong>Drive UI from <span class="mono">next</span></strong>: <span class="mono">SEND_OTP</span> | <span class="mono">PIN_CHECK</span> | <span class="mono">VERIFY_OTP</span> | <span class="mono">SET_PIN</span></li>
+    </ul>
+  </section>
+
+  <section id="flow">
+    <h2>2. Happy paths</h2>
+    <h3>Register / first-time (no PIN yet)</h3>
+    <pre>1. POST /auth                 → next=SEND_OTP, authToken
+2. POST /otp/createAndSend    → next=VERIFY_OTP, authToken
+3. POST /otp/verify           → next=SET_PIN, pinSetupToken
+4. PUT  /setPinCode           → { "status": "PIN_SET" }
+5. POST /login                → accessToken + refreshToken</pre>
+
+    <h3>Existing user (PIN already set, status ACTIVE)</h3>
+    <pre>1. POST /auth  → next=PIN_CHECK, authToken
+2. POST /login → accessToken + refreshToken</pre>
+
+    <h3>Forgot PIN</h3>
+    <pre>1. POST /auth { purpose: "RESET" } → next=SEND_OTP
+2. createAndSend → verify → setPinCode → login
+   (RESET setPin revokes other devices' refresh sessions)</pre>
+
+    <div class="box">
+      <strong>Important:</strong> User who verified OTP but left before setPin (status OTP_VERIFIED) gets
+      <span class="mono">next=SEND_OTP</span> on next /auth — not PIN_CHECK.
+    </div>
+  </section>
+
+  <!-- AUTH -->
+  <section id="auth">
+    <h2><span class="tag tag-post">POST</span> <span class="path">/api/v1/newUsers/auth</span></h2>
+    <p class="muted">No Authorization header. Does not create user. Does not send SMS.</p>
+
+    <h3>Request headers</h3>
+    <table>
+      <tr><th>Header</th><th>Required</th><th>Notes</th></tr>
+      <tr><td class="mono">Accept-Language</td><td>recommended</td><td>az | en | ru (default az)</td></tr>
+      <tr><td class="mono">Content-Type</td><td>yes</td><td>application/json</td></tr>
+    </table>
+
+    <h3>Request body</h3>
+    <pre>{
+  "phoneNumber": "+994501234567",
+  "purpose": "RESET"
+}</pre>
+    <table>
+      <tr><th>Field</th><th>Type</th><th>Required</th><th>Notes</th></tr>
+      <tr><td class="mono">phoneNumber</td><td>string</td><td>yes</td><td>Normalized to +994XXXXXXXXX</td></tr>
+      <tr><td class="mono">purpose</td><td>string</td><td>no</td><td>Omit or REGISTER for normal entry. Use RESET for forgot-PIN.</td></tr>
+    </table>
+
+    <h3>Success 200</h3>
+    <pre>{
+  "authToken": "&lt;jwt ~6 min&gt;",
+  "next": "SEND_OTP",
+  "purpose": "REGISTER",
+  "message": "..."
+}</pre>
+    <table>
+      <tr><th>Field</th><th>Notes</th></tr>
+      <tr><td class="mono">authToken</td><td>Pass to createAndSend / verify</td></tr>
+      <tr><td class="mono">next</td><td>SEND_OTP → OTP UI · PIN_CHECK → PIN login UI</td></tr>
+      <tr><td class="mono">purpose</td><td>REGISTER | RESET</td></tr>
+    </table>
+
+    <h3>Errors (examples)</h3>
+    <table>
+      <tr><th>HTTP</th><th>error</th><th>When</th></tr>
+      <tr><td>400</td><td class="mono">INVALID_PHONE</td><td>Bad phone</td></tr>
+      <tr><td>429</td><td class="mono">LOGIN_LOCKED</td><td>Rate limit (10/min phone, 30/min IP) — has countdown</td></tr>
+    </table>
+  </section>
+
+  <!-- CREATE -->
+  <section id="create">
+    <h2><span class="tag tag-post">POST</span> <span class="path">/api/v1/newUsers/otp/createAndSend</span></h2>
+    <p class="muted">Sends SMS OTP. Code never appears in JSON.</p>
+
+    <h3>Request body</h3>
+    <pre>{
+  "authToken": "&lt;from /auth&gt;"
+}</pre>
+
+    <h3>Success 200</h3>
+    <pre>{
+  "authToken": "&lt;same or echoed jwt&gt;",
+  "next": "VERIFY_OTP",
+  "purpose": "REGISTER",
+  "message": "..."
+}</pre>
+
+    <h3>Limits</h3>
+    <ul>
+      <li>Resend cooldown: <strong>30 seconds</strong></li>
+      <li>Max <strong>3 SMS / 15 min</strong> per phone → phone lock <strong>~5 min</strong></li>
+      <li>IP abuse → IP lock <strong>24 h</strong></li>
+      <li>OTP TTL: <strong>3 minutes</strong></li>
+      <li>SMS language follows Accept-Language</li>
+    </ul>
+
+    <h3>Errors</h3>
+    <table>
+      <tr><th>HTTP</th><th>error</th><th>Countdown?</th></tr>
+      <tr><td>401</td><td class="mono">AUTH_TOKEN_EXPIRED</td><td>no</td></tr>
+      <tr><td>401</td><td class="mono">INVALID_TOKEN</td><td>no</td></tr>
+      <tr><td>429</td><td class="mono">LOGIN_LOCKED</td><td class="ok">yes — cooldown / phone / IP</td></tr>
+    </table>
+  </section>
+
+  <!-- VERIFY -->
+  <section id="verify">
+    <h2><span class="tag tag-post">POST</span> <span class="path">/api/v1/newUsers/otp/verify</span></h2>
+
+    <h3>Request body</h3>
+    <pre>{
+  "authToken": "&lt;from /auth or createAndSend&gt;",
+  "otp": "123456"
+}</pre>
+    <p class="muted">Alias <span class="mono">otpCode</span> also accepted.</p>
+
+    <h3>Success 200</h3>
+    <pre>{
+  "pinSetupToken": "&lt;NEW jwt — use only for setPinCode&gt;",
+  "next": "SET_PIN",
+  "purpose": "REGISTER",
+  "message": "..."
+}</pre>
+    <div class="box box-warn">
+      Response uses <strong>pinSetupToken</strong>, not authToken. Replace any previous authToken for the set-PIN step.
+      authToken field is omitted (null fields not serialized).
+    </div>
+
+    <h3>Errors</h3>
+    <table>
+      <tr><th>HTTP</th><th>error</th><th>Countdown?</th></tr>
+      <tr><td>401</td><td class="mono">OTP_INCORRECT</td><td>no</td></tr>
+      <tr><td>400</td><td class="mono">OTP_EXPIRED</td><td>no — stay on OTP, allow resend</td></tr>
+      <tr><td>429</td><td class="mono">OTP_VERIFY_LOCKED</td><td class="ok">yes (~5 min after 3 wrong)</td></tr>
+      <tr><td>401</td><td class="mono">AUTH_TOKEN_EXPIRED / INVALID_TOKEN</td><td>no — back to phone</td></tr>
+    </table>
+  </section>
+
+  <!-- SET PIN -->
+  <section id="setpin">
+    <h2><span class="tag tag-put">PUT</span> <span class="path">/api/v1/newUsers/setPinCode</span></h2>
+    <p class="muted">No query purpose. Purpose is inside pinSetupToken JWT.</p>
+
+    <h3>Request body</h3>
+    <pre>{
+  "pinSetupToken": "&lt;from /otp/verify&gt;",
+  "pinCode": "2580"
+}</pre>
+    <table>
+      <tr><th>Field</th><th>Required</th><th>Notes</th></tr>
+      <tr><td class="mono">pinSetupToken</td><td>yes</td><td>Must be SET_PIN-stage token from verify</td></tr>
+      <tr><td class="mono">pinCode</td><td>yes</td><td>Exactly 4 digits; reject 1111 / 1234 / sequences</td></tr>
+    </table>
+
+    <h3>Success 200</h3>
+    <pre>{
+  "status": "PIN_SET"
+}</pre>
+    <div class="box box-warn">
+      No accessToken / refreshToken here. Client <strong>must</strong> call <span class="mono">/login</span> next.
+    </div>
+
+    <h3>Errors</h3>
+    <table>
+      <tr><th>HTTP</th><th>error</th></tr>
+      <tr><td>400</td><td class="mono">WEAK_PIN</td></tr>
+      <tr><td>400</td><td class="mono">PIN_LENGTH_ERROR</td></tr>
+      <tr><td>401</td><td class="mono">INVALID_TOKEN</td></tr>
+    </table>
+  </section>
+
+  <!-- LOGIN -->
+  <section id="login">
+    <h2><span class="tag tag-post">POST</span> <span class="path">/api/v1/newUsers/login</span></h2>
+
+    <h3>Request body</h3>
+    <pre>{
+  "phoneNumber": "+994501234567",
+  "pinCode": "2580",
+  "deviceId": "&lt;stable device id or FCM token&gt;",
+  "platform": "ANDROID"
+}</pre>
+    <table>
+      <tr><th>Field</th><th>Required</th><th>Notes</th></tr>
+      <tr><td class="mono">phoneNumber</td><td>yes</td><td></td></tr>
+      <tr><td class="mono">pinCode</td><td>yes</td><td>aliases: password / pin</td></tr>
+      <tr><td class="mono">deviceId</td><td>yes</td><td>alias: deviceToken</td></tr>
+      <tr><td class="mono">platform</td><td>no</td><td>ANDROID | IOS recommended</td></tr>
+    </table>
+
+    <h3>Success 200</h3>
+    <pre>{
+  "accessToken": "&lt;~15 min&gt;",
+  "refreshToken": "&lt;~1 year&gt;",
+  "role": "USER",
+  "userId": 123,
+  "phoneNumber": "+994501234567",
+  "name": null,
+  "surname": null,
+  "message": "..."
+}</pre>
+
+    <h3>Errors</h3>
+    <table>
+      <tr><th>HTTP</th><th>error</th><th>Countdown?</th></tr>
+      <tr><td>401</td><td class="mono">PIN_INCORRECT</td><td>no</td></tr>
+      <tr><td>401</td><td class="mono">PIN_NOT_SET</td><td>no</td></tr>
+      <tr><td>400</td><td class="mono">INVALID_TOKEN</td><td>missing deviceId</td></tr>
+      <tr><td>429</td><td class="mono">LOGIN_LOCKED</td><td class="ok">yes (~5 min after 3 wrong in window)</td></tr>
+    </table>
+  </section>
+
+  <!-- REFRESH -->
+  <section id="refresh">
+    <h2><span class="tag tag-post">POST</span> <span class="path">/api/v1/users/refresh</span></h2>
+    <p class="muted">Still the legacy refresh endpoint — NewUsers does not add a separate one.</p>
+    <pre>Authorization: Bearer &lt;refreshToken&gt;
+Accept-Language: az</pre>
+    <p>Success returns new <span class="mono">accessToken</span> + <span class="mono">refreshToken</span> (UserResponse shape).</p>
+  </section>
+
+  <!-- ERRORS -->
+  <section id="errors">
+    <h2>3. Error envelope (all NewUsers locks / errors)</h2>
+    <pre>{
+  "error": "LOGIN_LOCKED",
+  "message": "localized text",
+  "timeStamp": "2026-08-10T12:00:00",
+  "status": 429,
+  "lockedUntil": "2026-08-10T12:05:00",
+  "remainingSeconds": 240,
+  "retryAfter": 240
+}</pre>
+    <table>
+      <tr><th>Field</th><th>When</th></tr>
+      <tr><td class="mono">error</td><td>Machine code (OTP_INCORRECT, WEAK_PIN, LOGIN_LOCKED, …)</td></tr>
+      <tr><td class="mono">message</td><td>Human text (language from Accept-Language where applicable)</td></tr>
+      <tr><td class="mono">lockedUntil</td><td>Set on lock / rate-limit only</td></tr>
+      <tr><td class="mono">remainingSeconds</td><td>Seconds left — <strong>decreases</strong> on each poll; do not restart from full duration client-side if server returns a new value</td></tr>
+      <tr><td class="mono">retryAfter</td><td>Same as remainingSeconds (alias)</td></tr>
+    </table>
+
+    <div class="box">
+      <strong>Flutter countdown:</strong> Prefer server <span class="mono">remainingSeconds</span> / <span class="mono">lockedUntil</span> on every 429.
+      If user retries while locked, server returns the time left (e.g. 240), not a fresh 300.
+    </div>
+
+    <h3>APIs with lock + countdown</h3>
+    <ul>
+      <li><span class="mono">POST /auth</span> — rate limit</li>
+      <li><span class="mono">POST /otp/createAndSend</span> — cooldown / phone lock / IP lock</li>
+      <li><span class="mono">POST /otp/verify</span> — OTP_VERIFY_LOCKED</li>
+      <li><span class="mono">POST /login</span> — LOGIN_LOCKED</li>
+    </ul>
+  </section>
+
+  <section id="checklist">
+    <h2>4. Flutter checklist</h2>
+    <ul>
+      <li>Persist <span class="mono">authToken</span> for OTP steps; after verify switch to <span class="mono">pinSetupToken</span></li>
+      <li>UI routing from <span class="mono">next</span> only</li>
+      <li>After <span class="mono">PIN_SET</span> always call login</li>
+      <li>Require <span class="mono">deviceId</span> on login</li>
+      <li>Global 429 handler with countdown UI</li>
+      <li>Never log OTP or PIN</li>
+      <li>Refresh via legacy <span class="mono">/api/v1/users/refresh</span></li>
+    </ul>
+  </section>
+</main>
+
+<footer>
+  carland_auth · NewUsers contract for Flutter · source: NewUsersController / AuthFlowResponse / ResponseException
+</footer>
+</body>
+</html>
