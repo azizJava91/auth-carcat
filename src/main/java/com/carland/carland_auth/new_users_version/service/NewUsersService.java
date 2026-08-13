@@ -419,6 +419,10 @@ public class NewUsersService {
     }
 
     private void enforceSendLimits(String phone, String ip, LocalDateTime now, String acceptLanguage) {
+        // Expired locks must clear sendCount/window; otherwise unlock immediately re-locks for another full period.
+        otpSendLockService.clearExpiredIpLock(ip);
+        otpSendLockService.clearExpiredPhoneLock(phone);
+
         IpOtpRateLimit ipLimit = ipOtpRateLimitRepository.findByIpAddress(ip)
                 .orElseGet(() -> IpOtpRateLimit.builder().ipAddress(ip).sendCount(0).build());
         if (ipLimit.getLockedUntil() != null && ipLimit.getLockedUntil().isAfter(now)) {
